@@ -71,14 +71,14 @@ class _MiniPID:
         self._prev_err = 0.0
         self._saturated = False
 
-    def step(self, error: float) -> float:
+    def step(self, error: float, feedforward: float = 0.0) -> float:
         d = (error - self._prev_err) / self.dt
         p_out = self.kp * error
         if not self._saturated:
             self._integral = np.clip(
                 self._integral + self.ki * error * self.dt,
                 self.out_min, self.out_max)
-        raw = p_out + self._integral + self.kd * d
+        raw = p_out + self._integral + self.kd * d + feedforward
         out = float(np.clip(raw, self.out_min, self.out_max))
         self._saturated = (raw != out)
         self._prev_err = error
@@ -162,10 +162,11 @@ class _CascadedPlant:
         self.kd_att = 0.0
         self._att_prev_err = 0.0
 
-        # Inner loop (rate PID)
-        self.kp_rate = 0.1
-        self.ki_rate = 0.0
-        self.kd_rate = 0.0
+        # Inner loop (rate PID + FF)
+        self.kp_rate  = 0.1
+        self.ki_rate  = 0.0
+        self.kd_rate  = 0.0
+        self.kff_rate = 0.0
         self._rate_pid = _MiniPID(kp=self.kp_rate, ki=self.ki_rate,
                                   kd=self.kd_rate, dt=dt,
                                   out_min=-1.0, out_max=1.0)
@@ -181,18 +182,22 @@ class _CascadedPlant:
         self.rate_ref  = 0.0
         self._att_prev_err = 0.0
         self._rate_pid.reset()
+        # Restore gains (kff_rate must NOT be zeroed on reset)
         self._rate_pid.kp = self.kp_rate
         self._rate_pid.ki = self.ki_rate
         self._rate_pid.kd = self.kd_rate
+        # kff_rate is already an attribute; keep as-is
 
     def set_att_gains(self, kp: float, kd: float = 0.0) -> None:
         self.kp_att = kp
         self.kd_att = kd
 
-    def set_rate_gains(self, kp: float, ki: float, kd: float) -> None:
-        self.kp_rate = kp
-        self.ki_rate = ki
-        self.kd_rate = kd
+    def set_rate_gains(self, kp: float, ki: float, kd: float,
+                       kff: float = 0.0) -> None:
+        self.kp_rate  = kp
+        self.ki_rate  = ki
+        self.kd_rate  = kd
+        self.kff_rate = kff
         self._rate_pid.kp = kp
         self._rate_pid.ki = ki
         self._rate_pid.kd = kd
@@ -207,9 +212,11 @@ class _CascadedPlant:
             self.kp_att * att_err + self.kd_att * att_err_dot,
             -5.0, 5.0))
 
-        # Inner PID: rate error → actuator
+        # Inner PID + FF: rate error → actuator
+        # FF term: kff * rate_ref  (feed-forward bypasses error)
         rate_err = self.rate_ref - self.rate
-        actuator = self._rate_pid.step(rate_err)
+        ff = self.kff_rate * self.rate_ref
+        actuator = self._rate_pid.step(rate_err, feedforward=ff)
 
         # First-order rate dynamics
         self.rate += self.dt / self.tau_rate * (-self.rate + self.K_rate * actuator)
@@ -365,7 +372,8 @@ class PIDTuningEnv:
 
         self._pid.reset()
         self._plant.set_att_gains(self._kp_att, self._kd_att)
-        self._plant.set_rate_gains(self._kp, self._ki, self._kd)
+        self._plant.set_rate_gains(self._kp, self._ki, self._kd,
+                                   self._plant.kff_rate)
         self._plant.reset()
 
         # Randomise starting gains slightly around defaults ONLY for RL training.
@@ -381,7 +389,8 @@ class PIDTuningEnv:
             self._kd = float(np.random.uniform(0.0, self._gr["kd"][1] * 0.1))
         # else: keep the gains that were set externally (GUI / ParamStore)
         self._pid.kp, self._pid.ki, self._pid.kd = self._kp, self._ki, self._kd
-        self._plant.set_rate_gains(self._kp, self._ki, self._kd)
+        self._plant.set_rate_gains(self._kp, self._ki, self._kd,
+                                   self._plant.kff_rate)
 
         self._step     = 0
         self._t        = 0.0
@@ -408,7 +417,8 @@ class PIDTuningEnv:
         self._ki = float(np.clip(self._ki + dki, *self._gr["ki"]))
         self._kd = float(np.clip(self._kd + dkd, *self._gr["kd"]))
         self._pid.kp, self._pid.ki, self._pid.kd = self._kp, self._ki, self._kd
-        self._plant.set_rate_gains(self._kp, self._ki, self._kd)
+        self._plant.set_rate_gains(self._kp, self._ki, self._kd,
+                                   self._plant.kff_rate)
 
         # --- Cascaded plant step -------------------------------------------
         ref = self._get_ref(self._t)

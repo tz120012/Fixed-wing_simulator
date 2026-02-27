@@ -181,21 +181,22 @@ class _SimWorker:
         self._env._kd_att = kd_att
         self._env._plant.set_att_gains(kp_att, kd_att)
 
-        # Inner-loop (rate) gains
+        # Inner-loop (rate) gains + FF
         rate_gain_map = {
-            "pitch": ("PTCH_RATE_P", "PTCH_RATE_I", "PTCH_RATE_D"),
-            "roll":  ("ROLL_RATE_P",  "ROLL_RATE_I",  "ROLL_D"),
-            "yaw":   ("YAW_RATE_P",   "YAW_RATE_I",   None),
+            "pitch": ("PTCH_RATE_P", "PTCH_RATE_I", "PTCH_RATE_D", "PTCH_RATE_FF"),
+            "roll":  ("ROLL_RATE_P",  "ROLL_RATE_I",  "ROLL_D",      "ROLL_RATE_FF"),
+            "yaw":   ("YAW_RATE_P",   "YAW_RATE_I",   None,          None),
         }
-        kp_key, ki_key, kd_key = rate_gain_map.get(self.axis, rate_gain_map["pitch"])
+        kp_key, ki_key, kd_key, kff_key = rate_gain_map.get(self.axis, rate_gain_map["pitch"])
         self._env._kp = float(np.clip(gains.get(kp_key, self._env._kp), *gr["kp"]))
         self._env._ki = float(np.clip(gains.get(ki_key, self._env._ki), *gr["ki"]))
         self._env._kd = float(np.clip(
             gains.get(kd_key, self._env._kd) if kd_key else 0.0, *gr["kd"]))
+        kff = float(gains.get(kff_key, 0.0)) if kff_key else 0.0
         self._env._pid.kp = self._env._kp
         self._env._pid.ki = self._env._ki
         self._env._pid.kd = self._env._kd
-        self._env._plant.set_rate_gains(self._env._kp, self._env._ki, self._env._kd)
+        self._env._plant.set_rate_gains(self._env._kp, self._env._ki, self._env._kd, kff)
 
     def _run(self, on_done) -> None:
         # Save previous buffer to history (if non-empty)
@@ -211,7 +212,8 @@ class _SimWorker:
         obs, _ = self._env.reset()
         # reset() may randomise rate gains; restore ours
         self._env._plant.set_att_gains(self._env._kp_att, self._env._kd_att)
-        self._env._plant.set_rate_gains(self._env._kp, self._env._ki, self._env._kd)
+        self._env._plant.set_rate_gains(self._env._kp, self._env._ki, self._env._kd,
+                                        self._env._plant.kff_rate)
 
         action = np.zeros(3)
         new_buf: List[Dict] = []
