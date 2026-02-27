@@ -32,12 +32,10 @@ python -m pid_tuner.gui_tuner --axis pitch  # start on pitch tab
 
 from __future__ import annotations
 
-import math
 import os
 import sys
 import threading
-import time
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -85,137 +83,162 @@ COLORS = {
 
 class _SimWorker:
     """
-    Runs the PIDTuningEnv step-by-step in a background thread,
-    continuously posting (t, ref, output, error, p_term, i_term, d_term)
-    to a ring buffer that the GUI reads.
+    One-shot simulation worker: runs a full 6-second episode (600 steps at dt=0.01)
+    in a background thread using the current ParamStore gains, then fires an
+    optional callback with the completed buffer.
+
+    Usage
+    -----
+    worker.run_once(on_done=callback)   # starts background thread
+    worker.abort()                      # cancel in-progress run
     """
 
+    _EPISODE_STEPS = 600   # 6 s at dt=0.01
+    _MAX_HISTORY   = 3     # how many previous curves to keep for overlay
+
     def __init__(self, store: ParamStore, axis: str = "pitch"):
-        self.store  = store
-        self.axis   = axis
-        self._env   = PIDTuningEnv(axis=axis, episode_steps=99999, dt=0.01)
-        self._lock  = threading.Lock()
-        self._buf: List[Dict] = []
-        self._max_buf = 600   # 6 seconds at dt=0.01
+        self.store = store
+        self.axis  = axis
+        self._env  = PIDTuningEnv(axis=axis, episode_steps=self._EPISODE_STEPS, dt=0.01)
+        self._lock = threading.Lock()
+
+        self._buf: List[Dict]           = []
+        self._history: List[List[Dict]] = []
+        self._metrics: Dict[str, float] = {}
+
         self._running = False
         self._thread: Optional[threading.Thread] = None
-        self._metrics: Dict[str, float] = {}
-        self._version = -1    # track ParamStore changes
-        # History: keep last N snapshots for comparison overlay
-        self._history: List[List[Dict]] = []   # each entry is a full buffer snapshot
-        self._max_history = 3                  # keep at most 3 previous curves
 
-    def start(self) -> None:
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def run_once(self, on_done=None) -> None:
+        """Run a full episode in a background thread.
+
+        Parameters
+        ----------
+        on_done : callable(buf, metrics) | None
+            Called in the background thread when the episode finishes.
+            The GUI should schedule GUI updates via ``root.after(0, ...)``.
+        """
         if self._running:
             return
         self._running = True
-        self._env.reset()
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, args=(on_done,), daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
+    def abort(self) -> None:
+        """Abort a running episode (no-op if idle)."""
         self._running = False
 
-    def restart(self) -> None:
-        self.stop()
-        time.sleep(0.05)
-        self._env.reset()
+    def change_axis(self, axis: str) -> None:
+        self.abort()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=0.5)
+        self.axis = axis
+        self._env = PIDTuningEnv(axis=axis, episode_steps=self._EPISODE_STEPS, dt=0.01)
         with self._lock:
             self._buf.clear()
             self._history.clear()
         self._metrics = {}
-        self._version = -1
-        self.start()
-
-    def change_axis(self, axis: str) -> None:
-        self.stop()
-        time.sleep(0.05)
-        self.axis  = axis
-        self._env  = PIDTuningEnv(axis=axis, episode_steps=99999, dt=0.01)
-        self.restart()
 
     def get_buffer(self) -> List[Dict]:
         with self._lock:
             return list(self._buf)
 
     def get_history(self) -> List[List[Dict]]:
-        """Return snapshots of previous response curves (for overlay)."""
+        """Return snapshots of previous completed curves (for overlay)."""
         with self._lock:
             return [list(snap) for snap in self._history]
 
     def get_metrics(self) -> Dict[str, float]:
         return dict(self._metrics)
 
+    def is_running(self) -> bool:
+        return self._running
+
+    # ------------------------------------------------------------------
+    # Internal
     # ------------------------------------------------------------------
 
-    def _run(self) -> None:
-        obs, _ = self._env.reset()
-        action = np.zeros(3)  # no RL action – fixed gains
+    def _apply_gains(self) -> None:
+        """Write current ParamStore gains into env PID (no randomisation)."""
+        gains = self.store.get_all()
+        gr    = _GAIN_RANGES[self.axis]
+        axis_map = {
+            "pitch": ("PTCH_RATE_P", "PTCH_RATE_I", "PTCH_RATE_D"),
+            "roll":  ("ROLL_RATE_P",  "ROLL_RATE_I",  "ROLL_D"),
+            "yaw":   ("YAW_RATE_P",   "YAW_RATE_I",   "YAW_P"),
+        }
+        kp_key, ki_key, kd_key = axis_map.get(self.axis, axis_map["pitch"])
+        self._env._kp = np.clip(gains.get(kp_key, self._env._kp), *gr["kp"])
+        self._env._ki = np.clip(gains.get(ki_key, self._env._ki), *gr["ki"])
+        self._env._kd = np.clip(gains.get(kd_key, self._env._kd), *gr["kd"])
+        self._env._pid.kp = self._env._kp
+        self._env._pid.ki = self._env._ki
+        self._env._pid.kd = self._env._kd
 
-        while self._running:
-            # Check for parameter update
-            if self.store.version != self._version:
-                self._version = self.store.version
-                gains = self.store.get_all()
-                gr = _GAIN_RANGES[self.axis]
-                # Map ArduPilot names to env PID
-                axis_map = {
-                    "pitch": ("PTCH_RATE_P", "PTCH_RATE_I", "PTCH_RATE_D"),
-                    "roll":  ("ROLL_RATE_P",  "ROLL_RATE_I",  "ROLL_D"),
-                    "yaw":   ("YAW_RATE_P",   "YAW_RATE_I",   "YAW_P"),
-                }
-                kp_key, ki_key, kd_key = axis_map.get(self.axis, axis_map["pitch"])
-                self._env._kp = np.clip(gains.get(kp_key, self._env._kp), *gr["kp"])
-                self._env._ki = np.clip(gains.get(ki_key, self._env._ki), *gr["ki"])
-                self._env._kd = np.clip(gains.get(kd_key, self._env._kd), *gr["kd"])
-                self._env._pid.kp = self._env._kp
-                self._env._pid.ki = self._env._ki
-                self._env._pid.kd = self._env._kd
-                # Save current buffer as a history snapshot, then reset env so
-                # that _t restarts from 0 and stays within the fixed X-axis [0, XWINDOW]
-                with self._lock:
-                    if len(self._buf) >= 10:   # only save if there's meaningful data
-                        self._history.append(list(self._buf))
-                        if len(self._history) > self._max_history:
-                            self._history.pop(0)
-                    self._buf.clear()
-                obs, _ = self._env.reset()   # resets _t → 0 and clears PID integrator
-                # reset() randomises gains internally; restore the GUI values
-                self._env._pid.kp = self._env._kp
-                self._env._pid.ki = self._env._ki
-                self._env._pid.kd = self._env._kd
+    def _run(self, on_done) -> None:
+        # Save previous buffer to history (if non-empty)
+        with self._lock:
+            if len(self._buf) >= 10:
+                self._history.append(list(self._buf))
+                if len(self._history) > self._MAX_HISTORY:
+                    self._history.pop(0)
+            self._buf.clear()
+
+        # Apply current GUI gains, then reset env (t → 0, integrator cleared)
+        self._apply_gains()
+        obs, _ = self._env.reset()
+        # reset() may randomise gains; restore ours
+        self._env._pid.kp = self._env._kp
+        self._env._pid.ki = self._env._ki
+        self._env._pid.kd = self._env._kd
+
+        action = np.zeros(3)
+        new_buf: List[Dict] = []
+        info: Dict = {}
+
+        for _ in range(self._EPISODE_STEPS):
+            if not self._running:
+                break   # aborted
 
             obs, reward, term, trunc, info = self._env.step(action)
 
             p_term = self._env._pid.kp * info["error"]
             i_term = float(self._env._pid._integral)
-            d_term = float(self._env._pid.kd * (self._env._pid._prev_err - info["error"])
+            d_term = float(self._env._pid.kd
+                           * (self._env._pid._prev_err - info["error"])
                            / max(self._env._pid.dt, 1e-9))
 
-            record = {
-                "t":       self._env._t,
-                "ref":     info["ref"],
-                "output":  info["output"],
-                "error":   info["error"],
-                "p_term":  p_term,
-                "i_term":  i_term,
-                "d_term":  d_term,
-            }
-            with self._lock:
-                self._buf.append(record)
-                if len(self._buf) > self._max_buf:
-                    self._buf.pop(0)
-
-            self._metrics = {
-                "overshoot":  info["peak_overshoot"] * 100.0,
-                "settle_time": info["settle_time"],
-                "iae":        info["integral_abs_error"],
-            }
+            new_buf.append({
+                "t":      self._env._t,
+                "ref":    info["ref"],
+                "output": info["output"],
+                "error":  info["error"],
+                "p_term": p_term,
+                "i_term": i_term,
+                "d_term": d_term,
+            })
 
             if term or trunc:
-                obs, _ = self._env.reset()
+                break
 
-            time.sleep(self._env._pid.dt)
+        # Commit results
+        with self._lock:
+            self._buf = new_buf
+
+        self._metrics = {
+            "overshoot":   info.get("peak_overshoot", 0.0) * 100.0,
+            "settle_time": info.get("settle_time", 0.0),
+            "iae":         info.get("integral_abs_error", 0.0),
+        }
+
+        self._running = False
+        if on_done is not None:
+            on_done(list(new_buf), dict(self._metrics))
 
 
 # ---------------------------------------------------------------------------
@@ -329,8 +352,6 @@ class PIDTunerGUI:
         self._build_param_panel()
         self._build_chart_panel()
 
-        # Start periodic chart update (every 150 ms)
-        self.root.after(150, self._update_charts)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ------------------------------------------------------------------
@@ -440,10 +461,13 @@ class PIDTunerGUI:
         # Bottom control buttons
         btn_frame = tk.Frame(left, bg=COLORS["panel"])
         btn_frame.pack(fill="x", padx=8, pady=8)
-        ttk.Button(btn_frame, text="▶ Run",  command=self._run_sim,
-                   style="Green.TButton").pack(side="left", padx=2)
-        ttk.Button(btn_frame, text="■ Stop", command=self._stop_sim,
-                   style="Red.TButton").pack(side="left", padx=2)
+        self._btn_run = ttk.Button(btn_frame, text="▶ Run",  command=self._run_sim,
+                                   style="Green.TButton")
+        self._btn_run.pack(side="left", padx=2)
+        self._btn_stop = ttk.Button(btn_frame, text="■ Stop", command=self._stop_sim,
+                                    style="Red.TButton")
+        self._btn_stop.pack(side="left", padx=2)
+        self._btn_stop.state(["disabled"])
         ttk.Button(btn_frame, text="🤖 RL Auto-tune",
                    command=self._rl_autotune,
                    style="Accent.TButton").pack(side="left", padx=2)
@@ -519,86 +543,76 @@ class PIDTunerGUI:
                  font=("Consolas", 9)).pack(side="bottom", pady=4)
 
     # ------------------------------------------------------------------
-    # Periodic chart update (runs in GUI thread via after())
+    # Chart drawing (called once per Run completion)
     # ------------------------------------------------------------------
 
-    # Fixed X-axis window (seconds)
-    _XWINDOW = 6.0
-
-    def _update_charts(self) -> None:
-        buf     = self._worker.get_buffer()
+    def _draw_charts(self, buf: List[Dict], metrics: Dict[str, float]) -> None:
+        """Render completed episode curves. Called from GUI thread."""
         history = self._worker.get_history()
-        metrics = self._worker.get_metrics()
 
-        if len(buf) >= 2:
-            t_arr   = np.array([r["t"]      for r in buf])
-            ref_arr = np.array([r["ref"]    for r in buf])
-            out_arr = np.array([r["output"] for r in buf])
-            err_arr = np.array([r["error"]  for r in buf])
-            p_arr   = np.array([r["p_term"] for r in buf])
-            i_arr   = np.array([r["i_term"] for r in buf])
-            d_arr   = np.array([r["d_term"] for r in buf])
+        for ax in (self._ax_resp, self._ax_error, self._ax_pid):
+            ax.cla()
+            ax.set_facecolor(COLORS["panel"])
+            ax.tick_params(colors=COLORS["muted"], labelsize=7)
+            for spine in ax.spines.values():
+                spine.set_color(COLORS["muted"])
+                spine.set_linewidth(0.5)
 
-            for ax in (self._ax_resp, self._ax_error, self._ax_pid):
-                ax.cla()
-                ax.set_facecolor(COLORS["panel"])
-                ax.tick_params(colors=COLORS["muted"], labelsize=7)
-                for spine in ax.spines.values():
-                    spine.set_color(COLORS["muted"])
-                    spine.set_linewidth(0.5)
-
-            # ── History overlay (faded grey, oldest = most transparent) ──
-            n_hist = len(history)
-            for i, snap in enumerate(history):
-                if len(snap) < 2:
-                    continue
-                # alpha: oldest 0.15 → newest 0.35
-                alpha = 0.15 + 0.20 * (i / max(n_hist - 1, 1))
-                ht = np.array([r["t"]      for r in snap])
-                ho = np.array([r["output"] for r in snap])
-                he = np.array([r["error"]  for r in snap])
-                hp = np.array([r["p_term"] for r in snap])
-                hi_ = np.array([r["i_term"] for r in snap])
-                hd = np.array([r["d_term"] for r in snap])
-                self._ax_resp.plot(ht, ho,  color="#888888", lw=0.8, alpha=alpha)
-                self._ax_error.plot(ht, he, color="#888888", lw=0.8, alpha=alpha)
-                self._ax_pid.plot(ht, hp,   color="#888888", lw=0.6, alpha=alpha)
-                self._ax_pid.plot(ht, hi_,  color="#888888", lw=0.6, alpha=alpha)
-                self._ax_pid.plot(ht, hd,   color="#888888", lw=0.6, alpha=alpha)
-
-            # ── Current curves ──
-            # Response
-            self._ax_resp.plot(t_arr, ref_arr, "--",
-                               color=COLORS["yellow"], lw=1, label="Setpoint")
-            self._ax_resp.plot(t_arr, out_arr,
-                               color=COLORS["accent"], lw=1.2, label="Output")
-            self._ax_resp.legend(fontsize=7, facecolor=COLORS["panel"],
-                                  labelcolor=COLORS["text"], loc="upper right")
-            self._ax_resp.set_title("Step Response",
-                                     color=COLORS["text"], fontsize=9)
-
-            # Error
-            self._ax_error.plot(t_arr, err_arr,
-                                 color=COLORS["red"], lw=1)
-            self._ax_error.axhline(0, color=COLORS["muted"], lw=0.5, ls="--")
-            self._ax_error.set_title("Error", color=COLORS["text"], fontsize=9)
-
-            # PID terms
-            self._ax_pid.plot(t_arr, p_arr, color=COLORS["accent"],
-                               lw=1, label="P")
-            self._ax_pid.plot(t_arr, i_arr, color=COLORS["green"],
-                               lw=1, label="I")
-            self._ax_pid.plot(t_arr, d_arr, color=COLORS["yellow"],
-                               lw=1, label="D")
-            self._ax_pid.legend(fontsize=7, facecolor=COLORS["panel"],
-                                  labelcolor=COLORS["text"], loc="upper right")
-            self._ax_pid.set_title("PID Terms", color=COLORS["text"], fontsize=9)
-
-            # ── Fixed X-axis: always show [0, _XWINDOW] ──
-            for ax in (self._ax_resp, self._ax_error, self._ax_pid):
-                ax.set_xlim(0.0, self._XWINDOW)
-
+        if len(buf) < 2:
             self._canvas_widget.draw_idle()
+            return
+
+        t_arr   = np.array([r["t"]      for r in buf])
+        ref_arr = np.array([r["ref"]    for r in buf])
+        out_arr = np.array([r["output"] for r in buf])
+        err_arr = np.array([r["error"]  for r in buf])
+        p_arr   = np.array([r["p_term"] for r in buf])
+        i_arr   = np.array([r["i_term"] for r in buf])
+        d_arr   = np.array([r["d_term"] for r in buf])
+
+        # ── History overlay (faded grey, oldest = most transparent) ──
+        n_hist = len(history)
+        for i, snap in enumerate(history):
+            if len(snap) < 2:
+                continue
+            alpha = 0.15 + 0.20 * (i / max(n_hist - 1, 1))
+            ht  = np.array([r["t"]      for r in snap])
+            ho  = np.array([r["output"] for r in snap])
+            he  = np.array([r["error"]  for r in snap])
+            hp  = np.array([r["p_term"] for r in snap])
+            hi_ = np.array([r["i_term"] for r in snap])
+            hd  = np.array([r["d_term"] for r in snap])
+            self._ax_resp.plot(ht, ho,  color="#888888", lw=0.8, alpha=alpha)
+            self._ax_error.plot(ht, he, color="#888888", lw=0.8, alpha=alpha)
+            self._ax_pid.plot(ht, hp,   color="#888888", lw=0.6, alpha=alpha)
+            self._ax_pid.plot(ht, hi_,  color="#888888", lw=0.6, alpha=alpha)
+            self._ax_pid.plot(ht, hd,   color="#888888", lw=0.6, alpha=alpha)
+
+        # ── Current curves ──
+        self._ax_resp.plot(t_arr, ref_arr, "--",
+                           color=COLORS["yellow"], lw=1, label="Setpoint")
+        self._ax_resp.plot(t_arr, out_arr,
+                           color=COLORS["accent"], lw=1.2, label="Output")
+        self._ax_resp.legend(fontsize=7, facecolor=COLORS["panel"],
+                              labelcolor=COLORS["text"], loc="upper right")
+        self._ax_resp.set_title("Step Response", color=COLORS["text"], fontsize=9)
+
+        self._ax_error.plot(t_arr, err_arr, color=COLORS["red"], lw=1)
+        self._ax_error.axhline(0, color=COLORS["muted"], lw=0.5, ls="--")
+        self._ax_error.set_title("Error", color=COLORS["text"], fontsize=9)
+
+        self._ax_pid.plot(t_arr, p_arr, color=COLORS["accent"],  lw=1, label="P")
+        self._ax_pid.plot(t_arr, i_arr, color=COLORS["green"],   lw=1, label="I")
+        self._ax_pid.plot(t_arr, d_arr, color=COLORS["yellow"],  lw=1, label="D")
+        self._ax_pid.legend(fontsize=7, facecolor=COLORS["panel"],
+                              labelcolor=COLORS["text"], loc="upper right")
+        self._ax_pid.set_title("PID Terms", color=COLORS["text"], fontsize=9)
+
+        # Fixed X-axis
+        for ax in (self._ax_resp, self._ax_error, self._ax_pid):
+            ax.set_xlim(0.0, t_arr[-1] if len(t_arr) else 6.0)
+
+        self._canvas_widget.draw_idle()
 
         if metrics:
             self._metrics_var.set(
@@ -607,11 +621,35 @@ class PIDTunerGUI:
                 f"IAE: {metrics.get('iae', 0):.3f}"
             )
 
-        self.root.after(150, self._update_charts)
+    # ------------------------------------------------------------------
+    # Simulation control
+    # ------------------------------------------------------------------
 
-    # ------------------------------------------------------------------
-    # Toolbar callbacks
-    # ------------------------------------------------------------------
+    def _run_sim(self) -> None:
+        if self._worker.is_running():
+            return
+        # Disable Run, enable Stop, show status
+        self._btn_run.state(["disabled"])
+        self._btn_stop.state(["!disabled"])
+        self._metrics_var.set("Running simulation …")
+
+        def _on_done(buf, metrics):
+            # Called from background thread → schedule GUI update on main thread
+            self.root.after(0, self._on_sim_done, buf, metrics)
+
+        self._worker.run_once(on_done=_on_done)
+
+    def _on_sim_done(self, buf: List[Dict], metrics: Dict[str, float]) -> None:
+        """Called in GUI thread when one-shot episode finishes."""
+        self._btn_run.state(["!disabled"])
+        self._btn_stop.state(["disabled"])
+        self._draw_charts(buf, metrics)
+
+    def _stop_sim(self) -> None:
+        self._worker.abort()
+        self._btn_run.state(["!disabled"])
+        self._btn_stop.state(["disabled"])
+        self._metrics_var.set("Stopped.")
 
     def _save_params(self) -> None:
         path = filedialog.asksaveasfilename(
@@ -654,12 +692,6 @@ class PIDTunerGUI:
     # ------------------------------------------------------------------
     # Simulation control
     # ------------------------------------------------------------------
-
-    def _run_sim(self) -> None:
-        self._worker.restart()
-
-    def _stop_sim(self) -> None:
-        self._worker.stop()
 
     def _on_axis_change(self, *_) -> None:
         self._axis = self._axis_var.get().lower()
@@ -718,11 +750,10 @@ class PIDTunerGUI:
 
     def run(self) -> None:
         """Start the GUI event loop (blocking)."""
-        self._worker.start()
         self.root.mainloop()
 
     def _on_close(self) -> None:
-        self._worker.stop()
+        self._worker.abort()
         self.root.destroy()
 
 
