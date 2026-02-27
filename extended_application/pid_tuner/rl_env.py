@@ -262,11 +262,18 @@ class PIDTuningEnv:
         self._pid.reset()
         self._plant.reset(x0=0.0)
 
-        # Randomise starting gains slightly around defaults
-        self._kp = float(np.random.uniform(
-            self._gr["kp"][0], self._gr["kp"][1] * 0.4))
-        self._ki = float(np.random.uniform(0.0, self._gr["ki"][1] * 0.1))
-        self._kd = float(np.random.uniform(0.0, self._gr["kd"][1] * 0.1))
+        # Randomise starting gains slightly around defaults ONLY for RL training.
+        # When called from the GUI worker the caller restores its own gains
+        # immediately after reset(), so we only randomise if no gains have been
+        # set externally (i.e. kp is still the init-time mid-range default).
+        _kp_mid = (self._gr["kp"][0] + self._gr["kp"][1]) / 2
+        if self._kp == _kp_mid and self._ki == 0.0 and self._kd == 0.0:
+            # RL training path: randomise
+            self._kp = float(np.random.uniform(
+                self._gr["kp"][0], self._gr["kp"][1] * 0.4))
+            self._ki = float(np.random.uniform(0.0, self._gr["ki"][1] * 0.1))
+            self._kd = float(np.random.uniform(0.0, self._gr["kd"][1] * 0.1))
+        # else: keep the gains that were set externally (GUI / ParamStore)
         self._pid.kp, self._pid.ki, self._pid.kd = self._kp, self._ki, self._kd
 
         self._step     = 0

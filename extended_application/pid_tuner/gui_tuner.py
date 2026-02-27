@@ -180,6 +180,10 @@ class _SimWorker:
                             self._history.pop(0)
                     self._buf.clear()
                 obs, _ = self._env.reset()   # resets _t → 0 and clears PID integrator
+                # reset() randomises gains internally; restore the GUI values
+                self._env._pid.kp = self._env._kp
+                self._env._pid.ki = self._env._ki
+                self._env._pid.kd = self._env._kd
 
             obs, reward, term, trunc, info = self._env.step(action)
 
