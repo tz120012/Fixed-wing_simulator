@@ -122,6 +122,103 @@ class _FirstOrderPlant:
 
 
 # ---------------------------------------------------------------------------
+# Cascaded two-loop plant (attitude outer + rate inner)
+# ---------------------------------------------------------------------------
+
+class _CascadedPlant:
+    """
+    Cascaded plant that mimics ArduPlane's attitude + rate control structure.
+
+    Outer loop (attitude):
+        attitude_ref  →  [kp_att, kd_att]  →  rate_ref
+    Inner loop (rate):
+        rate_ref  →  [kp_rate, ki_rate, kd_rate]  →  actuator_cmd  →  angular_rate
+    Kinematics:
+        attitude += angular_rate * dt
+
+    Angular-rate dynamics (first-order):
+        τ_rate · dω/dt = -ω + K_rate · actuator_cmd
+
+    Axis parameters (approximate TB2 linearised modes):
+      pitch : τ_rate=0.15s, K_rate=10.0
+      roll  : τ_rate=0.08s, K_rate=14.0
+      yaw   : τ_rate=0.30s, K_rate= 5.0
+    """
+
+    _AXIS_PARAMS = {
+        "pitch": {"tau_rate": 0.15, "K_rate": 10.0},
+        "roll":  {"tau_rate": 0.08, "K_rate": 14.0},
+        "yaw":   {"tau_rate": 0.30, "K_rate":  5.0},
+    }
+
+    def __init__(self, axis: str = "pitch", dt: float = 0.01):
+        p = self._AXIS_PARAMS.get(axis, self._AXIS_PARAMS["pitch"])
+        self.tau_rate = p["tau_rate"]
+        self.K_rate   = p["K_rate"]
+        self.dt       = dt
+
+        # Outer loop (attitude PD)
+        self.kp_att = 1.0
+        self.kd_att = 0.0
+        self._att_prev_err = 0.0
+
+        # Inner loop (rate PID)
+        self.kp_rate = 0.1
+        self.ki_rate = 0.0
+        self.kd_rate = 0.0
+        self._rate_pid = _MiniPID(kp=self.kp_rate, ki=self.ki_rate,
+                                  kd=self.kd_rate, dt=dt,
+                                  out_min=-1.0, out_max=1.0)
+
+        # States
+        self.attitude  = 0.0   # θ (rad, normalised)
+        self.rate      = 0.0   # ω (rad/s, normalised)
+        self.rate_ref  = 0.0   # inner-loop setpoint
+
+    def reset(self) -> None:
+        self.attitude  = 0.0
+        self.rate      = 0.0
+        self.rate_ref  = 0.0
+        self._att_prev_err = 0.0
+        self._rate_pid.reset()
+        self._rate_pid.kp = self.kp_rate
+        self._rate_pid.ki = self.ki_rate
+        self._rate_pid.kd = self.kd_rate
+
+    def set_att_gains(self, kp: float, kd: float = 0.0) -> None:
+        self.kp_att = kp
+        self.kd_att = kd
+
+    def set_rate_gains(self, kp: float, ki: float, kd: float) -> None:
+        self.kp_rate = kp
+        self.ki_rate = ki
+        self.kd_rate = kd
+        self._rate_pid.kp = kp
+        self._rate_pid.ki = ki
+        self._rate_pid.kd = kd
+
+    def step(self, att_ref: float) -> None:
+        """Advance one time step given an attitude setpoint."""
+        # Outer PD: attitude error → rate command
+        att_err = att_ref - self.attitude
+        att_err_dot = (att_err - self._att_prev_err) / self.dt
+        self._att_prev_err = att_err
+        self.rate_ref = float(np.clip(
+            self.kp_att * att_err + self.kd_att * att_err_dot,
+            -5.0, 5.0))
+
+        # Inner PID: rate error → actuator
+        rate_err = self.rate_ref - self.rate
+        actuator = self._rate_pid.step(rate_err)
+
+        # First-order rate dynamics
+        self.rate += self.dt / self.tau_rate * (-self.rate + self.K_rate * actuator)
+
+        # Kinematics: integrate rate → attitude
+        self.attitude += self.rate * self.dt
+
+
+# ---------------------------------------------------------------------------
 # Reference trajectory generator
 # ---------------------------------------------------------------------------
 
@@ -218,14 +315,15 @@ class PIDTuningEnv:
 
         self._gr = _GAIN_RANGES.get(axis, _GAIN_RANGES["pitch"])
 
-        # PID and plant instances
-        self._pid   = _MiniPID(dt=dt)
-        self._plant = _FirstOrderPlant(axis=axis, dt=dt)
+        # Cascaded plant (attitude outer + rate inner)
+        self._plant = _CascadedPlant(axis=axis, dt=dt)
+
+        # RL inner-loop PID proxy (used only for RL gain update bookkeeping)
+        self._pid = _MiniPID(dt=dt)
 
         # Gym spaces
         obs_low  = np.full(9, -10.0, dtype=np.float32)
         obs_high = np.full(9,  10.0, dtype=np.float32)
-        # normalised gains [0,1], overshoot [0,1], settling [0,1]
         obs_low [3:8] = 0.0
         obs_high[3:8] = 1.0
 
@@ -234,13 +332,19 @@ class PIDTuningEnv:
             self.action_space      = spaces.Box(
                 low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
 
-        # State
-        self._step    = 0
-        self._t       = 0.0
+        # Outer-loop attitude gains (set externally by GUI or RL)
+        self._kp_att = 1.0
+        self._kd_att = 0.0
+
+        # Inner-loop rate gains (RL tunes these)
         self._kp      = (_GAIN_RANGES[axis]["kp"][0] + _GAIN_RANGES[axis]["kp"][1]) / 2
         self._ki      = 0.0
         self._kd      = 0.0
-        self._err_int = 0.0
+
+        # Metrics
+        self._step     = 0
+        self._t        = 0.0
+        self._err_int  = 0.0
         self._prev_err = 0.0
         self._peak_err = 0.0
         self._settled  = False
@@ -260,7 +364,9 @@ class PIDTuningEnv:
             np.random.seed(seed)
 
         self._pid.reset()
-        self._plant.reset(x0=0.0)
+        self._plant.set_att_gains(self._kp_att, self._kd_att)
+        self._plant.set_rate_gains(self._kp, self._ki, self._kd)
+        self._plant.reset()
 
         # Randomise starting gains slightly around defaults ONLY for RL training.
         # When called from the GUI worker the caller restores its own gains
@@ -275,6 +381,7 @@ class PIDTuningEnv:
             self._kd = float(np.random.uniform(0.0, self._gr["kd"][1] * 0.1))
         # else: keep the gains that were set externally (GUI / ParamStore)
         self._pid.kp, self._pid.ki, self._pid.kd = self._kp, self._ki, self._kd
+        self._plant.set_rate_gains(self._kp, self._ki, self._kd)
 
         self._step     = 0
         self._t        = 0.0
@@ -301,12 +408,14 @@ class PIDTuningEnv:
         self._ki = float(np.clip(self._ki + dki, *self._gr["ki"]))
         self._kd = float(np.clip(self._kd + dkd, *self._gr["kd"]))
         self._pid.kp, self._pid.ki, self._pid.kd = self._kp, self._ki, self._kd
+        self._plant.set_rate_gains(self._kp, self._ki, self._kd)
 
-        # --- Plant step -----------------------------------------------------
+        # --- Cascaded plant step -------------------------------------------
         ref = self._get_ref(self._t)
-        err = ref - self._plant.x
-        u   = self._pid.step(err)
-        y   = self._plant.step(u)
+        self._plant.step(ref)                  # advances attitude + rate
+        y   = self._plant.attitude             # outer output (attitude)
+        err = ref - y                          # attitude tracking error
+        u   = self._plant.rate                 # inner output (rate) – proxy effort
 
         # --- Performance metrics -------------------------------------------
         self._err_int  += abs(err) * self.dt
@@ -339,7 +448,11 @@ class PIDTuningEnv:
         obs  = self._get_obs(err, u, ref)
         info = {
             "kp": self._kp, "ki": self._ki, "kd": self._kd,
-            "error": err, "output": y, "ref": ref,
+            "error":    err,
+            "output":   y,                          # attitude (outer loop output)
+            "ref":      ref,                        # attitude setpoint
+            "rate":     self._plant.rate,           # angular rate (inner loop output)
+            "rate_ref": self._plant.rate_ref,       # rate setpoint (outer → inner)
             "peak_overshoot": self._peak_err,
             "settle_time": self._settle_t,
             "integral_abs_error": self._err_int,

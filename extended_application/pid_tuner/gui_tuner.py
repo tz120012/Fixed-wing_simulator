@@ -164,21 +164,38 @@ class _SimWorker:
     # ------------------------------------------------------------------
 
     def _apply_gains(self) -> None:
-        """Write current ParamStore gains into env PID (no randomisation)."""
+        """Write current ParamStore gains into env cascaded plant (no randomisation)."""
         gains = self.store.get_all()
         gr    = _GAIN_RANGES[self.axis]
-        axis_map = {
+
+        # Outer-loop (attitude) gains
+        att_gain_map = {
+            "pitch": ("PTCH_P",  "PTCH_D"),
+            "roll":  ("ROLL_P",  "ROLL_D"),
+            "yaw":   ("YAW_P",   None),
+        }
+        kp_att_key, kd_att_key = att_gain_map.get(self.axis, att_gain_map["pitch"])
+        kp_att = float(gains.get(kp_att_key, self._env._kp_att))
+        kd_att = float(gains.get(kd_att_key, self._env._kd_att)) if kd_att_key else 0.0
+        self._env._kp_att = kp_att
+        self._env._kd_att = kd_att
+        self._env._plant.set_att_gains(kp_att, kd_att)
+
+        # Inner-loop (rate) gains
+        rate_gain_map = {
             "pitch": ("PTCH_RATE_P", "PTCH_RATE_I", "PTCH_RATE_D"),
             "roll":  ("ROLL_RATE_P",  "ROLL_RATE_I",  "ROLL_D"),
-            "yaw":   ("YAW_RATE_P",   "YAW_RATE_I",   "YAW_P"),
+            "yaw":   ("YAW_RATE_P",   "YAW_RATE_I",   None),
         }
-        kp_key, ki_key, kd_key = axis_map.get(self.axis, axis_map["pitch"])
-        self._env._kp = np.clip(gains.get(kp_key, self._env._kp), *gr["kp"])
-        self._env._ki = np.clip(gains.get(ki_key, self._env._ki), *gr["ki"])
-        self._env._kd = np.clip(gains.get(kd_key, self._env._kd), *gr["kd"])
+        kp_key, ki_key, kd_key = rate_gain_map.get(self.axis, rate_gain_map["pitch"])
+        self._env._kp = float(np.clip(gains.get(kp_key, self._env._kp), *gr["kp"]))
+        self._env._ki = float(np.clip(gains.get(ki_key, self._env._ki), *gr["ki"]))
+        self._env._kd = float(np.clip(
+            gains.get(kd_key, self._env._kd) if kd_key else 0.0, *gr["kd"]))
         self._env._pid.kp = self._env._kp
         self._env._pid.ki = self._env._ki
         self._env._pid.kd = self._env._kd
+        self._env._plant.set_rate_gains(self._env._kp, self._env._ki, self._env._kd)
 
     def _run(self, on_done) -> None:
         # Save previous buffer to history (if non-empty)
@@ -192,10 +209,9 @@ class _SimWorker:
         # Apply current GUI gains, then reset env (t → 0, integrator cleared)
         self._apply_gains()
         obs, _ = self._env.reset()
-        # reset() may randomise gains; restore ours
-        self._env._pid.kp = self._env._kp
-        self._env._pid.ki = self._env._ki
-        self._env._pid.kd = self._env._kd
+        # reset() may randomise rate gains; restore ours
+        self._env._plant.set_att_gains(self._env._kp_att, self._env._kd_att)
+        self._env._plant.set_rate_gains(self._env._kp, self._env._ki, self._env._kd)
 
         action = np.zeros(3)
         new_buf: List[Dict] = []
@@ -207,20 +223,22 @@ class _SimWorker:
 
             obs, reward, term, trunc, info = self._env.step(action)
 
-            p_term = self._env._pid.kp * info["error"]
-            i_term = float(self._env._pid._integral)
-            d_term = float(self._env._pid.kd
-                           * (self._env._pid._prev_err - info["error"])
-                           / max(self._env._pid.dt, 1e-9))
+            # Rate-loop PID terms (from inner rate PID in _CascadedPlant)
+            rate_pid = self._env._plant._rate_pid
+            p_term = rate_pid.kp * (info["rate_ref"] - info["rate"])
+            i_term = float(rate_pid._integral)
+            d_term = 0.0   # finite-diff D is internal to _MiniPID
 
             new_buf.append({
-                "t":      self._env._t,
-                "ref":    info["ref"],
-                "output": info["output"],
-                "error":  info["error"],
-                "p_term": p_term,
-                "i_term": i_term,
-                "d_term": d_term,
+                "t":        self._env._t,
+                "ref":      info["ref"],           # attitude setpoint
+                "output":   info["output"],        # attitude (outer output)
+                "rate_ref": info["rate_ref"],      # rate setpoint (outer→inner)
+                "rate":     info["rate"],          # actual angular rate
+                "error":    info["error"],         # attitude error
+                "p_term":   p_term,
+                "i_term":   i_term,
+                "d_term":   d_term,
             })
 
             if term or trunc:
@@ -510,27 +528,29 @@ class PIDTunerGUI:
     # ------------------------------------------------------------------
 
     def _build_chart_panel(self) -> None:
-        fig = Figure(figsize=(8, 6), dpi=90,
+        fig = Figure(figsize=(8, 7), dpi=90,
                      facecolor=COLORS["bg"])
         self._fig = fig
 
-        # Three subplots
-        self._ax_resp  = fig.add_subplot(3, 1, 1)
-        self._ax_error = fig.add_subplot(3, 1, 2)
-        self._ax_pid   = fig.add_subplot(3, 1, 3)
-        fig.subplots_adjust(hspace=0.45, left=0.08, right=0.97,
-                            top=0.95, bottom=0.08)
+        # Four subplots: attitude / rate / error / PID terms
+        self._ax_att   = fig.add_subplot(4, 1, 1)   # attitude response
+        self._ax_rate  = fig.add_subplot(4, 1, 2)   # angular rate response
+        self._ax_error = fig.add_subplot(4, 1, 3)   # attitude error
+        self._ax_pid   = fig.add_subplot(4, 1, 4)   # rate PID terms
+        fig.subplots_adjust(hspace=0.55, left=0.08, right=0.97,
+                            top=0.96, bottom=0.06)
 
-        for ax in (self._ax_resp, self._ax_error, self._ax_pid):
+        for ax in (self._ax_att, self._ax_rate, self._ax_error, self._ax_pid):
             ax.set_facecolor(COLORS["panel"])
             ax.tick_params(colors=COLORS["muted"], labelsize=7)
-            ax.spines[:].set_color(COLORS["muted"])
             for spine in ax.spines.values():
+                spine.set_color(COLORS["muted"])
                 spine.set_linewidth(0.5)
 
-        self._ax_resp.set_title("Step Response", color=COLORS["text"], fontsize=9)
-        self._ax_error.set_title("Error", color=COLORS["text"], fontsize=9)
-        self._ax_pid.set_title("PID Terms", color=COLORS["text"], fontsize=9)
+        self._ax_att.set_title("Attitude Response", color=COLORS["text"], fontsize=9)
+        self._ax_rate.set_title("Angular Rate Response", color=COLORS["text"], fontsize=9)
+        self._ax_error.set_title("Attitude Error", color=COLORS["text"], fontsize=9)
+        self._ax_pid.set_title("Rate PID Terms", color=COLORS["text"], fontsize=9)
 
         canvas = FigureCanvasTkAgg(fig, master=self._right)
         canvas.get_tk_widget().pack(fill="both", expand=True)
@@ -550,7 +570,7 @@ class PIDTunerGUI:
         """Render completed episode curves. Called from GUI thread."""
         history = self._worker.get_history()
 
-        for ax in (self._ax_resp, self._ax_error, self._ax_pid):
+        for ax in (self._ax_att, self._ax_rate, self._ax_error, self._ax_pid):
             ax.cla()
             ax.set_facecolor(COLORS["panel"])
             ax.tick_params(colors=COLORS["muted"], labelsize=7)
@@ -562,55 +582,79 @@ class PIDTunerGUI:
             self._canvas_widget.draw_idle()
             return
 
-        t_arr   = np.array([r["t"]      for r in buf])
-        ref_arr = np.array([r["ref"]    for r in buf])
-        out_arr = np.array([r["output"] for r in buf])
-        err_arr = np.array([r["error"]  for r in buf])
-        p_arr   = np.array([r["p_term"] for r in buf])
-        i_arr   = np.array([r["i_term"] for r in buf])
-        d_arr   = np.array([r["d_term"] for r in buf])
+        t_arr        = np.array([r["t"]        for r in buf])
+        ref_arr      = np.array([r["ref"]      for r in buf])
+        att_arr      = np.array([r["output"]   for r in buf])
+        rate_ref_arr = np.array([r["rate_ref"] for r in buf])
+        rate_arr     = np.array([r["rate"]     for r in buf])
+        err_arr      = np.array([r["error"]    for r in buf])
+        p_arr        = np.array([r["p_term"]   for r in buf])
+        i_arr        = np.array([r["i_term"]   for r in buf])
+        d_arr        = np.array([r["d_term"]   for r in buf])
 
-        # ── History overlay (faded grey, oldest = most transparent) ──
+        t_end = float(t_arr[-1]) if len(t_arr) else 6.0
+
+        # ── History overlay (faded grey) ──
         n_hist = len(history)
         for i, snap in enumerate(history):
             if len(snap) < 2:
                 continue
             alpha = 0.15 + 0.20 * (i / max(n_hist - 1, 1))
-            ht  = np.array([r["t"]      for r in snap])
-            ho  = np.array([r["output"] for r in snap])
-            he  = np.array([r["error"]  for r in snap])
-            hp  = np.array([r["p_term"] for r in snap])
-            hi_ = np.array([r["i_term"] for r in snap])
-            hd  = np.array([r["d_term"] for r in snap])
-            self._ax_resp.plot(ht, ho,  color="#888888", lw=0.8, alpha=alpha)
+            ht   = np.array([r["t"]        for r in snap])
+            ho   = np.array([r["output"]   for r in snap])
+            hrr  = np.array([r["rate_ref"] for r in snap])
+            hr   = np.array([r["rate"]     for r in snap])
+            he   = np.array([r["error"]    for r in snap])
+            hp   = np.array([r["p_term"]   for r in snap])
+            hi_  = np.array([r["i_term"]   for r in snap])
+            hd   = np.array([r["d_term"]   for r in snap])
+            self._ax_att.plot(ht,  ho,  color="#888888", lw=0.8, alpha=alpha)
+            self._ax_rate.plot(ht, hrr, color="#888888", lw=0.6, alpha=alpha)
+            self._ax_rate.plot(ht, hr,  color="#666666", lw=0.8, alpha=alpha)
             self._ax_error.plot(ht, he, color="#888888", lw=0.8, alpha=alpha)
             self._ax_pid.plot(ht, hp,   color="#888888", lw=0.6, alpha=alpha)
             self._ax_pid.plot(ht, hi_,  color="#888888", lw=0.6, alpha=alpha)
             self._ax_pid.plot(ht, hd,   color="#888888", lw=0.6, alpha=alpha)
 
         # ── Current curves ──
-        self._ax_resp.plot(t_arr, ref_arr, "--",
-                           color=COLORS["yellow"], lw=1, label="Setpoint")
-        self._ax_resp.plot(t_arr, out_arr,
-                           color=COLORS["accent"], lw=1.2, label="Output")
-        self._ax_resp.legend(fontsize=7, facecolor=COLORS["panel"],
-                              labelcolor=COLORS["text"], loc="upper right")
-        self._ax_resp.set_title("Step Response", color=COLORS["text"], fontsize=9)
+        # 1. Attitude response
+        self._ax_att.plot(t_arr, ref_arr, "--",
+                          color=COLORS["yellow"], lw=1, label="Att Setpoint")
+        self._ax_att.plot(t_arr, att_arr,
+                          color=COLORS["accent"], lw=1.2, label="Attitude")
+        self._ax_att.legend(fontsize=7, facecolor=COLORS["panel"],
+                             labelcolor=COLORS["text"], loc="lower right")
+        self._ax_att.set_title("Attitude Response", color=COLORS["text"], fontsize=9)
+        self._ax_att.set_ylabel("(norm.)", color=COLORS["muted"], fontsize=7)
 
+        # 2. Angular rate response
+        self._ax_rate.plot(t_arr, rate_ref_arr, "--",
+                           color=COLORS["yellow"], lw=1, label="Rate Setpoint")
+        self._ax_rate.plot(t_arr, rate_arr,
+                           color=COLORS["green"], lw=1.2, label="Rate")
+        self._ax_rate.axhline(0, color=COLORS["muted"], lw=0.5, ls=":")
+        self._ax_rate.legend(fontsize=7, facecolor=COLORS["panel"],
+                              labelcolor=COLORS["text"], loc="lower right")
+        self._ax_rate.set_title("Angular Rate Response", color=COLORS["text"], fontsize=9)
+        self._ax_rate.set_ylabel("(norm.)", color=COLORS["muted"], fontsize=7)
+
+        # 3. Attitude error
         self._ax_error.plot(t_arr, err_arr, color=COLORS["red"], lw=1)
         self._ax_error.axhline(0, color=COLORS["muted"], lw=0.5, ls="--")
-        self._ax_error.set_title("Error", color=COLORS["text"], fontsize=9)
+        self._ax_error.set_title("Attitude Error", color=COLORS["text"], fontsize=9)
 
-        self._ax_pid.plot(t_arr, p_arr, color=COLORS["accent"],  lw=1, label="P")
-        self._ax_pid.plot(t_arr, i_arr, color=COLORS["green"],   lw=1, label="I")
-        self._ax_pid.plot(t_arr, d_arr, color=COLORS["yellow"],  lw=1, label="D")
+        # 4. Rate PID terms
+        self._ax_pid.plot(t_arr, p_arr, color=COLORS["accent"], lw=1, label="P")
+        self._ax_pid.plot(t_arr, i_arr, color=COLORS["green"],  lw=1, label="I")
+        self._ax_pid.plot(t_arr, d_arr, color=COLORS["yellow"], lw=1, label="D")
+        self._ax_pid.axhline(0, color=COLORS["muted"], lw=0.5, ls=":")
         self._ax_pid.legend(fontsize=7, facecolor=COLORS["panel"],
-                              labelcolor=COLORS["text"], loc="upper right")
-        self._ax_pid.set_title("PID Terms", color=COLORS["text"], fontsize=9)
+                             labelcolor=COLORS["text"], loc="upper right")
+        self._ax_pid.set_title("Rate PID Terms", color=COLORS["text"], fontsize=9)
 
         # Fixed X-axis
-        for ax in (self._ax_resp, self._ax_error, self._ax_pid):
-            ax.set_xlim(0.0, t_arr[-1] if len(t_arr) else 6.0)
+        for ax in (self._ax_att, self._ax_rate, self._ax_error, self._ax_pid):
+            ax.set_xlim(0.0, t_end)
 
         self._canvas_widget.draw_idle()
 
