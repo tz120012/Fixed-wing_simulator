@@ -101,6 +101,9 @@ class _SimWorker:
         self._thread: Optional[threading.Thread] = None
         self._metrics: Dict[str, float] = {}
         self._version = -1    # track ParamStore changes
+        # History: keep last N snapshots for comparison overlay
+        self._history: List[List[Dict]] = []   # each entry is a full buffer snapshot
+        self._max_history = 3                  # keep at most 3 previous curves
 
     def start(self) -> None:
         if self._running:
@@ -119,6 +122,7 @@ class _SimWorker:
         self._env.reset()
         with self._lock:
             self._buf.clear()
+            self._history.clear()
         self._metrics = {}
         self._version = -1
         self.start()
@@ -134,6 +138,11 @@ class _SimWorker:
         with self._lock:
             return list(self._buf)
 
+    def get_history(self) -> List[List[Dict]]:
+        """Return snapshots of previous response curves (for overlay)."""
+        with self._lock:
+            return [list(snap) for snap in self._history]
+
     def get_metrics(self) -> Dict[str, float]:
         return dict(self._metrics)
 
@@ -147,6 +156,13 @@ class _SimWorker:
             # Check for parameter update
             if self.store.version != self._version:
                 self._version = self.store.version
+                # Save current buffer as a history snapshot before applying new gains
+                with self._lock:
+                    if len(self._buf) >= 10:   # only save if there's meaningful data
+                        self._history.append(list(self._buf))
+                        if len(self._history) > self._max_history:
+                            self._history.pop(0)
+                    self._buf.clear()
                 gains = self.store.get_all()
                 gr = _GAIN_RANGES[self.axis]
                 # Map ArduPilot names to env PID
@@ -500,8 +516,12 @@ class PIDTunerGUI:
     # Periodic chart update (runs in GUI thread via after())
     # ------------------------------------------------------------------
 
+    # Fixed X-axis window (seconds)
+    _XWINDOW = 6.0
+
     def _update_charts(self) -> None:
-        buf = self._worker.get_buffer()
+        buf     = self._worker.get_buffer()
+        history = self._worker.get_history()
         metrics = self._worker.get_metrics()
 
         if len(buf) >= 2:
@@ -521,6 +541,26 @@ class PIDTunerGUI:
                     spine.set_color(COLORS["muted"])
                     spine.set_linewidth(0.5)
 
+            # ── History overlay (faded grey, oldest = most transparent) ──
+            n_hist = len(history)
+            for i, snap in enumerate(history):
+                if len(snap) < 2:
+                    continue
+                # alpha: oldest 0.15 → newest 0.35
+                alpha = 0.15 + 0.20 * (i / max(n_hist - 1, 1))
+                ht = np.array([r["t"]      for r in snap])
+                ho = np.array([r["output"] for r in snap])
+                he = np.array([r["error"]  for r in snap])
+                hp = np.array([r["p_term"] for r in snap])
+                hi_ = np.array([r["i_term"] for r in snap])
+                hd = np.array([r["d_term"] for r in snap])
+                self._ax_resp.plot(ht, ho,  color="#888888", lw=0.8, alpha=alpha)
+                self._ax_error.plot(ht, he, color="#888888", lw=0.8, alpha=alpha)
+                self._ax_pid.plot(ht, hp,   color="#888888", lw=0.6, alpha=alpha)
+                self._ax_pid.plot(ht, hi_,  color="#888888", lw=0.6, alpha=alpha)
+                self._ax_pid.plot(ht, hd,   color="#888888", lw=0.6, alpha=alpha)
+
+            # ── Current curves ──
             # Response
             self._ax_resp.plot(t_arr, ref_arr, "--",
                                color=COLORS["yellow"], lw=1, label="Setpoint")
@@ -547,6 +587,10 @@ class PIDTunerGUI:
             self._ax_pid.legend(fontsize=7, facecolor=COLORS["panel"],
                                   labelcolor=COLORS["text"], loc="upper right")
             self._ax_pid.set_title("PID Terms", color=COLORS["text"], fontsize=9)
+
+            # ── Fixed X-axis: always show [0, _XWINDOW] ──
+            for ax in (self._ax_resp, self._ax_error, self._ax_pid):
+                ax.set_xlim(0.0, self._XWINDOW)
 
             self._canvas_widget.draw_idle()
 
