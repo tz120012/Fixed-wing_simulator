@@ -156,13 +156,6 @@ class _SimWorker:
             # Check for parameter update
             if self.store.version != self._version:
                 self._version = self.store.version
-                # Save current buffer as a history snapshot before applying new gains
-                with self._lock:
-                    if len(self._buf) >= 10:   # only save if there's meaningful data
-                        self._history.append(list(self._buf))
-                        if len(self._history) > self._max_history:
-                            self._history.pop(0)
-                    self._buf.clear()
                 gains = self.store.get_all()
                 gr = _GAIN_RANGES[self.axis]
                 # Map ArduPilot names to env PID
@@ -178,6 +171,15 @@ class _SimWorker:
                 self._env._pid.kp = self._env._kp
                 self._env._pid.ki = self._env._ki
                 self._env._pid.kd = self._env._kd
+                # Save current buffer as a history snapshot, then reset env so
+                # that _t restarts from 0 and stays within the fixed X-axis [0, XWINDOW]
+                with self._lock:
+                    if len(self._buf) >= 10:   # only save if there's meaningful data
+                        self._history.append(list(self._buf))
+                        if len(self._history) > self._max_history:
+                            self._history.pop(0)
+                    self._buf.clear()
+                obs, _ = self._env.reset()   # resets _t → 0 and clears PID integrator
 
             obs, reward, term, trunc, info = self._env.step(action)
 
