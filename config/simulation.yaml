@@ -1,0 +1,29 @@
+# Simulation engine configuration
+
+# Time stepping
+dt: 0.01            # Simulation time step (s) - 100 Hz
+duration: 30.0      # Total simulation duration (s)
+
+# Numerical integrator: "rk45" (batch analysis) or "dopri5" (real-time loop)
+integrator: dopri5
+
+# Integration tolerances
+rtol: 1.0e-6
+atol: 1.0e-6
+
+# Initial conditions (NED frame)
+initial_position: [0.0, 0.0, -100.0]   # [x_north, y_east, z_down] in metres
+initial_heading_deg: 0.0                # Initial heading (deg, 0=North)
+
+# Flight mode at start
+# Options: MANUAL, STABILIZE, FBW_A, FBW_B, AUTO, LOITER, RTH
+initial_mode: AUTO
+
+# Wind configuration (overrides environment/wind_model settings)
+wind_type: NONE     # NONE | FIXED | SINE | RANDOMSINE
+wind_speed: 5.0     # Mean wind speed (m/s), used by FIXED/SINE/RANDOMSINE
+wind_direction_deg: 270.0  # Wind FROM direction (met convention), used by FIXED
+
+# Logging
+log_enabled: true
+log_dir: logs

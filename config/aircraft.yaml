@@ -1,0 +1,12 @@
+# Aircraft configuration file
+# Select which aircraft to simulate and optionally override database defaults.
+# Available aircraft: TB2, Anka, Aksungur, Karayel, Predator, Heron MK1, Heron MK2
+
+aircraft_name: TB2
+
+# Optional parameter overrides (uncomment to override database defaults)
+# overrides:
+#   mass: 700.0
+#   S: 9.34
+#   c: 0.78
+#   b: 12.0

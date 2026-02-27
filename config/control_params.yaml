@@ -1,0 +1,37 @@
+# ArduPilot-compatible control parameters
+# Naming follows ArduPilot Plane parameter conventions exactly.
+
+# ---- Pitch axis ----
+PTCH_P: 1.0          # Pitch angle proportional gain
+PTCH_D: 0.08         # Pitch angle derivative gain
+PTCH_RATE_P: 0.04    # Pitch rate proportional gain
+PTCH_RATE_I: 0.1     # Pitch rate integral gain
+PTCH_RATE_D: 0.002   # Pitch rate derivative gain
+PTCH_RATE_FF: 0.15   # Pitch rate feed-forward
+
+# ---- Roll axis ----
+ROLL_P: 1.0          # Roll angle proportional gain
+ROLL_D: 0.05         # Roll angle derivative gain
+ROLL_RATE_P: 0.05    # Roll rate proportional gain
+ROLL_RATE_I: 0.1     # Roll rate integral gain
+ROLL_RATE_FF: 0.15   # Roll rate feed-forward
+
+# ---- Yaw axis ----
+YAW_P: 0.5           # Yaw / heading proportional gain
+YAW_RATE_P: 0.02     # Yaw rate proportional gain
+YAW_RATE_I: 0.0      # Yaw rate integral gain
+
+# ---- Limits ----
+LIM_PITCH_MAX: 20.0  # Maximum pitch angle (deg)
+LIM_PITCH_MIN: -5.0  # Minimum pitch angle (deg, trim lower bound)
+LIM_ROLL_CD: 4500    # Maximum roll angle in centidegrees (45 deg)
+THR_MAX: 1.0         # Maximum throttle (0-1)
+THR_MIN: 0.0         # Minimum throttle (0-1)
+
+# ---- Navigation / L1 controller ----
+NAVL1_PERIOD: 25.0   # L1 navigation period (s)
+NAVL1_DAMPING: 0.75  # L1 navigation damping ratio
+
+# ---- Speed/Altitude control ----
+AIRSPEED_CRUISE: 30.0  # Cruise airspeed (m/s)
+ALT_HOLD_RTL: 50.0     # RTL altitude (m)
