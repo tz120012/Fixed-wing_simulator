@@ -7,9 +7,9 @@ desired Euler angles and produces desired angular rate commands (or direct
 surface deflection increments) that are fed to the rate_controller.
 
 ArduPilot reference parameters used:
-  PTCH_P, PTCH_D
-  ROLL_P, ROLL_D
-  YAW_P
+  PTCH_P  (attitude outer loop, P only – no D)
+  ROLL_P  (attitude outer loop, P only – no D)
+  Yaw has no attitude outer loop in ArduPlane.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ class AttitudeController:
 
     Parameters
     ----------
-    ap_params : ArdupilotParams  – holds PTCH_P/D, ROLL_P/D, YAW_P
+    ap_params : ArdupilotParams  – holds PTCH_P, ROLL_P (P only, no D)
     dt        : default time step (s)
     """
 
@@ -54,23 +54,23 @@ class AttitudeController:
 
     def _build_controllers(self) -> None:
         ap = self.ap
-        # Roll: uses ROLL_P as P gain, ROLL_D as derivative (ArduPilot convention)
+        # Roll: P only (ArduPilot Plane attitude outer loop has no D)
         self.roll_pid = PIDController(
-            kp=ap.ROLL_P, ki=0.0, kd=ap.ROLL_D,
+            kp=ap.ROLL_P, ki=0.0, kd=0.0,
             output_min=-self.MAX_ROLL_RATE,
             output_max= self.MAX_ROLL_RATE,
             dt=self.dt,
         )
-        # Pitch: PTCH_P, PTCH_D
+        # Pitch: P only
         self.pitch_pid = PIDController(
-            kp=ap.PTCH_P, ki=0.0, kd=ap.PTCH_D,
+            kp=ap.PTCH_P, ki=0.0, kd=0.0,
             output_min=-self.MAX_PITCH_RATE,
             output_max= self.MAX_PITCH_RATE,
             dt=self.dt,
         )
-        # Yaw / heading: YAW_P only (simple proportional)
+        # Yaw: no attitude outer loop in ArduPlane; zero gain (pass-through)
         self.yaw_pid = PIDController(
-            kp=ap.YAW_P, ki=0.0, kd=0.0,
+            kp=0.0, ki=0.0, kd=0.0,
             output_min=-self.MAX_YAW_RATE,
             output_max= self.MAX_YAW_RATE,
             dt=self.dt,

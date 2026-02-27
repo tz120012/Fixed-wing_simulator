@@ -159,45 +159,73 @@ class FixedWingPlotter:
 # ---------------------------------------------------------------------------
 
     @staticmethod
-    def plot_6dof_matplotlib(history: Dict[str, np.ndarray], uav_name: str = "UAV") -> None:
+    def plot_6dof_matplotlib(
+        history:  Dict[str, np.ndarray],
+        uav_name: str  = "UAV",
+        show:     bool = True,
+        save_dir: Optional[str] = None,
+        dpi:      int  = 150,
+    ) -> None:
         """
-        Create static Matplotlib figures (8 subplots, same style as project-2 display.py).
+        Create static Matplotlib figures (3 figure windows, same style as project-2).
+
+        Parameters
+        ----------
+        history  : dict returned by StateHistory.to_dict()
+        uav_name : aircraft label used in figure titles
+        show     : if True, call plt.show() to display interactively;
+                   set False (or use matplotlib Agg backend) to suppress GUI
+        save_dir : if given, save each figure as PNG to this directory
+        dpi      : resolution for saved PNGs
         """
         import matplotlib.pyplot as plt
 
-        t = history["t"]
+        t   = history["t"]
         deg = np.degrees
 
+        def _maybe_save(fig, stem: str) -> None:
+            if save_dir is not None:
+                import os
+                os.makedirs(save_dir, exist_ok=True)
+                path = os.path.join(save_dir, f"{stem}.png")
+                try:
+                    fig.savefig(path, dpi=dpi, bbox_inches="tight")
+                except Exception as exc:
+                    print(f"[plotter] WARNING: could not save {path}: {exc}")
+
+        # ── Figure 1: Position & Velocity ────────────────────────────────
         fig1, axes = plt.subplots(2, 3, figsize=(15, 8))
         fig1.suptitle(f"{uav_name} – Position & Velocity", fontsize=13)
-        _pairs = [
-            ("North (m)",  history["x_north"]),
-            ("East  (m)",  history["x_east"]),
-            ("Alt   (m)",  history["altitude"]),
-            ("u (m/s)",    history["u"]),
-            ("v (m/s)",    history["v"]),
-            ("w (m/s)",    history["w"]),
-        ]
-        for ax, (lbl, data) in zip(axes.flat, _pairs):
+        for ax, (lbl, data) in zip(axes.flat, [
+            ("North (m)",    history["x_north"]),
+            ("East  (m)",    history["x_east"]),
+            ("Alt   (m)",    history["altitude"]),
+            ("u (m/s)",      history["u"]),
+            ("v (m/s)",      history["v"]),
+            ("w (m/s)",      history["w"]),
+        ]):
             ax.plot(t, data, linewidth=1.2)
             ax.set_title(lbl); ax.set_xlabel("t (s)"); ax.grid(True, alpha=0.3)
         plt.tight_layout()
+        _maybe_save(fig1, f"{uav_name}_position_velocity")
 
+        # ── Figure 2: Attitude & Angular Rates ───────────────────────────
         fig2, axes2 = plt.subplots(2, 3, figsize=(15, 8))
         fig2.suptitle(f"{uav_name} – Attitude & Angular Rates", fontsize=13)
-        _pairs2 = [
-            ("φ (deg)",    deg(history["phi"])),
-            ("θ (deg)",    deg(history["theta"])),
-            ("ψ (deg)",    deg(history["psi"])),
-            ("p (deg/s)",  deg(history["p"])),
-            ("q (deg/s)",  deg(history["q"])),
-            ("r (deg/s)",  deg(history["r"])),
-        ]
-        for ax, (lbl, data) in zip(axes2.flat, _pairs2):
+        for ax, (lbl, data) in zip(axes2.flat, [
+            ("φ (deg)",   deg(history["phi"])),
+            ("θ (deg)",   deg(history["theta"])),
+            ("ψ (deg)",   deg(history["psi"])),
+            ("p (deg/s)", deg(history["p"])),
+            ("q (deg/s)", deg(history["q"])),
+            ("r (deg/s)", deg(history["r"])),
+        ]):
             ax.plot(t, data, linewidth=1.2)
             ax.set_title(lbl); ax.set_xlabel("t (s)"); ax.grid(True, alpha=0.3)
         plt.tight_layout()
+        _maybe_save(fig2, f"{uav_name}_attitude_rates")
 
+        # ── Figure 3: Control Inputs ──────────────────────────────────────
         fig3, axes3 = plt.subplots(1, 4, figsize=(16, 4))
         fig3.suptitle(f"{uav_name} – Control Inputs", fontsize=13)
         for ax, lbl, key in zip(axes3,
@@ -206,5 +234,10 @@ class FixedWingPlotter:
             ax.plot(t, history[key], linewidth=1.2)
             ax.set_title(lbl); ax.set_xlabel("t (s)"); ax.grid(True, alpha=0.3)
         plt.tight_layout()
+        _maybe_save(fig3, f"{uav_name}_controls")
 
-        plt.show()
+        if show:
+            plt.show()
+        else:
+            # Close all figures to free memory when running non-interactively
+            plt.close("all")

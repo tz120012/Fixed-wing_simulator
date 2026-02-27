@@ -156,7 +156,7 @@ class TestArdupilotParams:
     def test_default_values(self, default_ap):
         assert default_ap.PTCH_P     == pytest.approx(1.0)
         assert default_ap.ROLL_P     == pytest.approx(1.0)
-        assert default_ap.YAW_P      == pytest.approx(0.5)
+        assert default_ap.YAW_RATE_P == pytest.approx(0.02)
         assert default_ap.LIM_PITCH_MAX == pytest.approx(20.0)
 
     def test_lim_roll_deg_property(self, default_ap):

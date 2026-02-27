@@ -29,7 +29,7 @@ print("Loaded ArduPilot parameters:")
 print(f"  PTCH_P      = {ap.PTCH_P}")
 print(f"  PTCH_RATE_P = {ap.PTCH_RATE_P}")
 print(f"  ROLL_P      = {ap.ROLL_P}")
-print(f"  YAW_P       = {ap.YAW_P}")
+print(f"  YAW_RATE_P  = {ap.YAW_RATE_P}")
 print(f"  AIRSPEED_CRUISE = {ap.AIRSPEED_CRUISE} m/s")
 print()
 

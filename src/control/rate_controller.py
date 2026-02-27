@@ -55,11 +55,11 @@ class RateController:
             output_min=-1.0, output_max=1.0, dt=self.dt,
         )
         self.roll_rate_pid = PIDController(
-            kp=ap.ROLL_RATE_P, ki=ap.ROLL_RATE_I, kd=0.0,
+            kp=ap.ROLL_RATE_P, ki=ap.ROLL_RATE_I, kd=ap.ROLL_RATE_D,
             output_min=-1.0, output_max=1.0, dt=self.dt,
         )
         self.yaw_rate_pid = PIDController(
-            kp=ap.YAW_RATE_P, ki=ap.YAW_RATE_I, kd=0.0,
+            kp=ap.YAW_RATE_P, ki=ap.YAW_RATE_I, kd=ap.YAW_RATE_D,
             output_min=-1.0, output_max=1.0, dt=self.dt,
         )
 
@@ -92,7 +92,8 @@ class RateController:
                                             feed_forward=self.ap.PTCH_RATE_FF * q_cmd)
         ail   = self.roll_rate_pid.update (p_cmd - p, dt=dt,
                                             feed_forward=self.ap.ROLL_RATE_FF * p_cmd)
-        rud   = self.yaw_rate_pid.update  (r_cmd - r, dt=dt)
+        rud   = self.yaw_rate_pid.update  (r_cmd - r, dt=dt,
+                                            feed_forward=self.ap.YAW_RATE_FF  * r_cmd)
 
         return RateOutput(elevator=elev, aileron=ail, rudder=rud)
 

@@ -24,28 +24,28 @@ class ArdupilotParams:
     """
 
     # ---- Pitch axis ----
-    PTCH_P:       float = 1.0
-    PTCH_D:       float = 0.08
-    PTCH_RATE_P:  float = 0.04
-    PTCH_RATE_I:  float = 0.10
-    PTCH_RATE_D:  float = 0.002
-    PTCH_RATE_FF: float = 0.15
+    PTCH_P:       float = 1.0          # attitude outer-loop P
+    PTCH_RATE_P:  float = 0.06         # rate loop P
+    PTCH_RATE_I:  float = 0.0          # integral disabled – use pure PD to eliminate limit cycle
+    PTCH_RATE_D:  float = 0.008        # damping
+    PTCH_RATE_FF: float = 0.0          # feedforward disabled
 
     # ---- Roll axis ----
-    ROLL_P:       float = 1.0
-    ROLL_D:       float = 0.05
+    ROLL_P:       float = 1.0          # attitude outer-loop P only (no D)
     ROLL_RATE_P:  float = 0.05
     ROLL_RATE_I:  float = 0.10
+    ROLL_RATE_D:  float = 0.002
     ROLL_RATE_FF: float = 0.15
 
-    # ---- Yaw axis ----
-    YAW_P:        float = 0.5
+    # ---- Yaw axis (rate loop only, no attitude outer loop) ----
     YAW_RATE_P:   float = 0.02
     YAW_RATE_I:   float = 0.0
+    YAW_RATE_D:   float = 0.0
+    YAW_RATE_FF:  float = 0.0
 
     # ---- Limits ----
-    LIM_PITCH_MAX:  float = 20.0   # deg
-    LIM_PITCH_MIN:  float = -5.0   # deg
+    LIM_PITCH_MAX:  float = 12.0   # deg  nose-up limit (conservative to avoid stall/diverge)
+    LIM_PITCH_MIN:  float = -12.0  # deg  nose-down limit (symmetric)
     LIM_ROLL_CD:    float = 4500.0 # centidegrees → 45 deg
     THR_MAX:        float = 1.0
     THR_MIN:        float = 0.0
@@ -109,17 +109,16 @@ class ArdupilotParams:
         """
         ok = True
         checks = [
-            ("PTCH_P",      0.0, 10.0),
-            ("PTCH_RATE_P", 0.0,  2.0),
-            ("PTCH_RATE_I", 0.0,  2.0),
-            ("ROLL_P",      0.0, 10.0),
-            ("ROLL_RATE_P", 0.0,  2.0),
-            ("YAW_P",       0.0,  5.0),
-            ("LIM_PITCH_MAX", 0.0, 45.0),
-            ("LIM_PITCH_MIN", -20.0, 0.0),
-            ("LIM_ROLL_CD",  0.0, 9000.0),
-            ("THR_MAX",      0.0,  1.0),
-            ("THR_MIN",      0.0,  1.0),
+            ("PTCH_P",       0.0, 10.0),
+            ("PTCH_RATE_P",  0.0,  2.0),
+            ("PTCH_RATE_I",  0.0,  2.0),
+            ("ROLL_P",       0.0, 10.0),
+            ("ROLL_RATE_P",  0.0,  2.0),
+            ("YAW_RATE_P",   0.0,  5.0),
+            ("LIM_PITCH_MAX",  0.0, 45.0),
+            ("LIM_PITCH_MIN", -45.0, 0.0),            ("LIM_ROLL_CD",   0.0, 9000.0),
+            ("THR_MAX",       0.0,  1.0),
+            ("THR_MIN",       0.0,  1.0),
             ("AIRSPEED_CRUISE", 5.0, 200.0),
         ]
         for name, lo, hi in checks:

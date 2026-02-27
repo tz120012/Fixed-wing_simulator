@@ -6,6 +6,7 @@ from control.flight_mode_manager   import (
     FlightMode, FlightModeManager, AircraftState, ControlTarget,
 )
 from control.navigation_controller import NavigationController, PathSegment
+from control.tecs_controller       import TECSController, TECSState
 from control.attitude_controller   import AttitudeController, AttitudeOutput
 from control.rate_controller       import RateController, RateOutput
 from control.servo_mixer           import ServoMixer, ServoOutput
@@ -15,6 +16,7 @@ __all__ = [
     "PIDController",
     "FlightMode", "FlightModeManager", "AircraftState", "ControlTarget",
     "NavigationController", "PathSegment",
+    "TECSController", "TECSState",
     "AttitudeController", "AttitudeOutput",
     "RateController", "RateOutput",
     "ServoMixer", "ServoOutput",

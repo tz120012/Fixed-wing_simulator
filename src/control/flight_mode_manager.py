@@ -195,13 +195,13 @@ class FlightModeManager:
             return self._manual(state)
 
         if mode == FlightMode.STABILIZE:
-            return self._stabilize(state)
+            return self._stabilize(state, nav_target)
 
         if mode == FlightMode.FBW_A:
             return self._fbw_a(state)
 
         if mode == FlightMode.FBW_B:
-            return self._fbw_b(state)
+            return self._fbw_b(state, nav_target)
 
         if mode in (FlightMode.AUTO, FlightMode.LOITER, FlightMode.RTH):
             return self._auto(state, nav_target)
@@ -224,15 +224,19 @@ class FlightModeManager:
             is_direct=True,
         )
 
-    def _stabilize(self, state: AircraftState) -> ControlTarget:
-        """Hold wings-level, neutral pitch; rate damping active."""
+    def _stabilize(self, state: AircraftState,
+                   nav_target: Optional[ControlTarget] = None) -> ControlTarget:
+        """Hold wings-level; use nav pitch/throttle command if available."""
+        pitch_cmd   = nav_target.pitch_cmd   if nav_target is not None else 0.0
+        throttle    = nav_target.throttle_cmd if nav_target is not None else 0.5
+        altitude_cmd = nav_target.altitude_cmd if nav_target is not None else state.altitude
         return ControlTarget(
             roll_cmd  = 0.0,
-            pitch_cmd = 0.0,
+            pitch_cmd = pitch_cmd,
             yaw_cmd   = state.psi,
             airspeed_cmd = self.cruise_speed,
-            altitude_cmd = state.altitude,
-            throttle_cmd = 0.5,
+            altitude_cmd = altitude_cmd,
+            throttle_cmd = throttle,
         )
 
     def _fbw_a(self, state: AircraftState) -> ControlTarget:
@@ -249,15 +253,19 @@ class FlightModeManager:
             throttle_cmd = 0.5,
         )
 
-    def _fbw_b(self, state: AircraftState) -> ControlTarget:
-        """FBW-B: Altitude hold + airspeed hold."""
+    def _fbw_b(self, state: AircraftState,
+               nav_target: Optional[ControlTarget] = None) -> ControlTarget:
+        """FBW-B: Altitude hold + airspeed hold; use nav pitch/throttle if available."""
+        pitch_cmd    = nav_target.pitch_cmd    if nav_target is not None else 0.0
+        throttle     = nav_target.throttle_cmd if nav_target is not None else 0.5
+        altitude_cmd = nav_target.altitude_cmd if nav_target is not None else self.cruise_alt
         return ControlTarget(
             roll_cmd  = 0.0,
-            pitch_cmd = 0.0,
+            pitch_cmd = pitch_cmd,
             yaw_cmd   = state.psi,
             airspeed_cmd = self.cruise_speed,
-            altitude_cmd = self.cruise_alt,
-            throttle_cmd = 0.5,
+            altitude_cmd = altitude_cmd,
+            throttle_cmd = throttle,
         )
 
     def _auto(self, state: AircraftState,

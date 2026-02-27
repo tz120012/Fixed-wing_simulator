@@ -23,7 +23,7 @@ from utils.math_utils          import saturate
 @dataclass
 class ServoOutput:
     """Final normalised surface and throttle commands (sent to dynamics)."""
-    elevator: float = 0.0   # [-1, 1]  positive = nose up
+    elevator: float = 0.0   # [-1, 1]  positive = nose up (control convention)
     aileron:  float = 0.0   # [-1, 1]  positive = right wing down
     rudder:   float = 0.0   # [-1, 1]  positive = nose right
     throttle: float = 0.0   # [ 0, 1]
@@ -37,13 +37,17 @@ class ServoOutput:
         """
         Convert normalised outputs to surface deflections in radians.
 
+        Note: aerodynamics convention is positive elevator = trailing-edge down
+        (nose DOWN).  The control stack uses positive = nose UP, so elevator
+        sign is negated here at the interface.
+
         Returns
         -------
         (de, da, dr) in radians
         """
-        de = self.elevator * elev_max_rad
-        da = self.aileron  * ail_max_rad
-        dr = self.rudder   * rud_max_rad
+        de = -self.elevator * elev_max_rad   # negate: ctrl +up → aero -trailing-edge
+        da =  self.aileron  * ail_max_rad
+        dr =  self.rudder   * rud_max_rad
         return de, da, dr
 
 

@@ -203,8 +203,10 @@ class NonlinearModel:
         )
 
         # --- Thrust (simple proportional model) ------------------------------
-        # T = throttle * T_max; T_max ≈ mass * g for level-flight capability
-        T_max = m * G * 1.5  # 1.5× weight for manoeuvre margin
+        # T = throttle * T_max
+        # T_max based on realistic thrust-to-weight ratio (~0.20 for medium UAV)
+        # TB2 @ 40m/s: D≈494N, T_max=1372N → thr_cruise≈0.36, max_climb≈5.2m/s
+        T_max = m * G * 0.20   # TWR=0.20: balanced for climb + cruise
         thrust = throttle * T_max
 
         # --- Gravity in body frame (NED: z positive down) -------------------
