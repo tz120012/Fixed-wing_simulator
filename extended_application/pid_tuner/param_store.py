@@ -66,13 +66,13 @@ DEFAULT_PARAMS: Dict[str, float] = {
 # Allowed ranges for each parameter [lo, hi]
 PARAM_RANGES: Dict[str, Tuple[float, float]] = {
     "PTCH_P":        (0.0,  10.0),
-    "PTCH_D":        (0.0,   1.0),
+    "PTCH_D":        (0.0,   0.1),
     "PTCH_RATE_P":   (0.0,   2.0),
     "PTCH_RATE_I":   (0.0,   2.0),
     "PTCH_RATE_D":   (0.0,   0.1),
     "PTCH_RATE_FF":  (0.0,   1.0),
     "ROLL_P":        (0.0,  10.0),
-    "ROLL_D":        (0.0,   1.0),
+    "ROLL_D":        (0.0,   0.1),
     "ROLL_RATE_P":   (0.0,   2.0),
     "ROLL_RATE_I":   (0.0,   2.0),
     "ROLL_RATE_FF":  (0.0,   1.0),
