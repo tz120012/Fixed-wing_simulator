@@ -22,15 +22,7 @@ FixedWingSimulator/
 │   ├── simulation/                  # 仿真引擎 & 积分器 & 状态管理
 │   ├── visualization/               # 可视化（Plotly/Matplotlib/动画）
 │   └── utils/                       # 数学工具 & 配置加载 & 日志
-├── extended_application/            # 扩展应用模块
-│   └── pid_tuner/                   # PID 自适应调参框架
-│       ├── param_store.py           # 线程安全参数仓库
-│       ├── rl_env.py                # Gym 兼容 RL 调参环境
-│       ├── rl_agent.py              # PPO 智能体 & 训练脚本
-│       ├── gui_tuner.py             # Tkinter GUI（实时曲线+滑块）
-│       ├── sim_adapter.py           # 参数仓库 ↔ 仿真器适配器
-│       └── checkpoints/             # RL 训练权重保存目录
-├── examples/                        # 6 个完整示例脚本
+├── examples/                        # 7 个完整示例脚本
 ├── tests/                           # 单元测试 & 集成测试（121个）
 ├── main.py                          # 命令行入口
 ├── requirements.txt                 # 依赖列表
@@ -243,86 +235,6 @@ state = sim.init_step()
 for _ in range(100):
     state = sim.step(dt=0.01)
     print(f"alt={state.altitude:.1f} m, airspeed={state.airspeed:.1f} m/s")
-```
-
----
-
-## PID 自适应调参框架（extended_application/pid_tuner）
-
-### 架构
-
-```
-GUI 线程 (Tkinter)  ─┐
-RL 线程  (PPO)      ─┼──▶  ParamStore（线程安全）──▶  SimAdapter ──▶  FixedWingSimulator
-脚本 API            ─┘         ↑ 实时热更新，无需重启仿真
-```
-
-### 启动 GUI 调参
-
-```bash
-cd FixedWingSimulator
-source .venv/bin/activate
-
-# 方式1：纯 GUI 预览（内置阶跃响应仿真）
-PYTHONPATH=extended_application python -m pid_tuner
-
-# 方式2：指定俯仰/滚转/偏航轴
-PYTHONPATH=extended_application python -m pid_tuner --axis roll
-
-# 方式3：预加载已有参数文件
-PYTHONPATH=extended_application python -m pid_tuner --config config/control_params.yaml
-
-# 方式4：GUI + 6-DOF 仿真联动（拖滑块实时影响飞行仿真）
-PYTHONPATH=extended_application python -m pid_tuner --sim --aircraft TB2 --duration 60 --mode STABILIZE
-```
-
-### GUI 功能说明
-
-| 区域 | 功能 |
-|------|------|
-| 左侧参数面板 | 滑块 + 输入框双向同步，按轴分组（Pitch / Roll / Yaw） |
-| 右侧曲线区 | 阶跃响应、误差曲线、P/I/D 分量实时刷新（150ms） |
-| 底部指标栏 | 超调量(%)、调节时间(s)、IAE |
-| 💾 Save | 保存参数到 YAML / JSON 文件 |
-| 📂 Load | 从文件加载参数 |
-| ↺ Reset | 恢复出厂默认值 |
-| 🤖 RL Auto-tune | 后台运行 PPO 训练，自动填入最优增益 |
-
-### RL 无 GUI 训练
-
-```bash
-# 训练 pitch 轴，50000 步
-PYTHONPATH=extended_application python -m pid_tuner --train --axis pitch --steps 50000
-
-# 训练 roll 轴，保存到指定路径
-PYTHONPATH=extended_application python -m pid_tuner --train --axis roll --steps 30000 \
-    --save extended_application/pid_tuner/checkpoints/roll_ppo.pt
-```
-
-### 在代码中集成
-
-```python
-import sys
-sys.path.insert(0, "src")
-sys.path.insert(0, "extended_application")
-
-from pid_tuner.param_store import ParamStore
-from pid_tuner.sim_adapter import SimAdapter
-from simulation.simulator  import FixedWingSimulator
-
-store   = ParamStore()
-sim     = FixedWingSimulator("TB2")
-adapter = SimAdapter(store, auto_reset=True)
-
-# 后台轮询：参数变化自动热更新到仿真器（50ms 间隔）
-adapter.start_polling(sim, interval=0.05)
-
-# 动态修改参数（脚本 / 外部程序均可）
-store.set("PTCH_P", 1.8)
-store.set_batch({"PTCH_RATE_P": 0.06, "PTCH_RATE_I": 0.12})
-
-# 保存调好的参数
-store.save_yaml("config/control_params.yaml")
 ```
 
 ---

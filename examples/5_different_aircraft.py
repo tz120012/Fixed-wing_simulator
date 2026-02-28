@@ -13,6 +13,10 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import numpy as np
+
+# ── Non-interactive backend MUST be set before any other matplotlib import ──
+import matplotlib
+matplotlib.use("Agg")          # renders to file only, no GUI window
 import matplotlib.pyplot as plt
 
 from models.aircraft_database import AIRCRAFT_NAMES, get_aircraft_params
@@ -61,4 +65,17 @@ for name, res in results.items():
                   f"{'YES' if m.stable else 'NO!':>7}")
 
 plt.tight_layout()
-plt.show()
+
+# Save figure to output directory
+output_dir = os.path.join(os.path.dirname(__file__), "..", "output", "figures")
+os.makedirs(output_dir, exist_ok=True)
+output_path = os.path.join(output_dir, "example5_all_aircraft_comparison.png")
+try:
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    print(f"\n[saved figure]  {output_path}")
+except Exception as exc:
+    print(f"\n[ERROR saving figure]: {exc}")
+finally:
+    plt.close(fig)
+
+print("\nDone. Figure saved to:", os.path.abspath(output_dir))

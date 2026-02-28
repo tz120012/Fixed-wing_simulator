@@ -12,14 +12,18 @@ Demonstrates:
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from simulation.simulator     import FixedWingSimulator
-from visualization.plotter    import FixedWingPlotter
+# ── Non-interactive backend MUST be set before any other matplotlib import ──
+import matplotlib
+matplotlib.use("Agg")          # renders to file only, no GUI window
 import matplotlib.pyplot as plt
 import numpy as np
 
+from simulation.simulator     import FixedWingSimulator
+from visualization.plotter    import FixedWingPlotter
+
 # ---- Create simulator with wind --------------------------------------------
 sim = FixedWingSimulator(
-    aircraft_name="Anka",
+    aircraft_name="TB2",
     dt=0.01,
     duration=30.0,
     initial_mode="FBW_B",
@@ -46,6 +50,19 @@ axes[0].plot(t, alt);  axes[0].set_title("Altitude (m)"); axes[0].grid(True, alp
 axes[0].axhline(200, color='r', linestyle='--', label='Reference')
 axes[0].legend()
 axes[1].plot(t, spd, color='g'); axes[1].set_title("Airspeed (m/s)"); axes[1].grid(True, alpha=0.3)
-fig.suptitle("Anka – FBW_B mode under RANDOMSINE wind")
+fig.suptitle("TB2 – FBW_B mode under RANDOMSINE wind")
 plt.tight_layout()
-plt.show()
+
+# Save figure to output directory
+output_dir = os.path.join(os.path.dirname(__file__), "..", "output", "figures")
+os.makedirs(output_dir, exist_ok=True)
+output_path = os.path.join(output_dir, "example7_wind_resistance.png")
+try:
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    print(f"\n[saved figure]  {output_path}")
+except Exception as exc:
+    print(f"\n[ERROR saving figure]: {exc}")
+finally:
+    plt.close(fig)
+
+print("\nDone. Figure saved to:", os.path.abspath(output_dir))

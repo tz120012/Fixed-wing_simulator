@@ -35,4 +35,5 @@ Thumbs.db
 # Logs / outputs
 *.log
 *.csv
+output/
 extended_application/pid_tuner/checkpoints/

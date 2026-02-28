@@ -45,7 +45,7 @@ DATA_DIR    = os.path.join(OUTPUT_DIR, "data")
 FIG_DPI     = 150
 FIG_FORMAT  = "png"
 
-UAV_NAME = "Predator"
+UAV_NAME = "TB2"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -128,7 +128,7 @@ print("Part 2 – Closed-loop PID simulation (STABILIZE)")
 print("=" * 55)
 
 sim = FixedWingSimulator(
-    aircraft_name="Predator",
+    aircraft_name="TB2",
     dt=0.01,
     duration=15.0,
     initial_mode="STABILIZE",   # full attitude PID active

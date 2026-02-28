@@ -15,6 +15,10 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import numpy as np
+
+# ── Non-interactive backend MUST be set before any other matplotlib import ──
+import matplotlib
+matplotlib.use("Agg")          # renders to file only, no GUI window
 import matplotlib.pyplot as plt
 
 from control.ardupilot_compat import ArdupilotParams
@@ -81,4 +85,17 @@ axes[0].set_ylabel("Altitude (m)"); axes[0].legend(fontsize=9); axes[0].grid(Tru
 axes[1].set_ylabel("Pitch θ (deg)"); axes[1].set_xlabel("Time (s)"); axes[1].grid(True, alpha=0.3)
 
 plt.tight_layout()
-plt.show()
+
+# Save figure to output directory
+output_dir = os.path.join(os.path.dirname(__file__), "..", "output", "figures")
+os.makedirs(output_dir, exist_ok=True)
+output_path = os.path.join(output_dir, "example6_ardupilot_param_sensitivity.png")
+try:
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    print(f"\n[saved figure]  {output_path}")
+except Exception as exc:
+    print(f"\n[ERROR saving figure]: {exc}")
+finally:
+    plt.close(fig)
+
+print("\nDone. Figure saved to:", os.path.abspath(output_dir))
