@@ -42,7 +42,10 @@ print(f"Parameter validation: {'PASSED' if ok else 'WARNINGS found'}")
 print()
 
 # ---- Export to ArduPilot .param file ----------------------------------------
-out_path = os.path.join(os.path.dirname(__file__), "..", "config", "TB2_export.param")
+# Save to output/ directory (auto-generated, not a config file)
+out_dir = os.path.join(os.path.dirname(__file__), "..", "output")
+os.makedirs(out_dir, exist_ok=True)
+out_path = os.path.join(out_dir, "TB2_export.param")
 AircraftFactory.export_ardupilot_params("TB2", out_path, ctrl_path)
 
 # ---- Compare: default vs high-gain pitch controller -------------------------
