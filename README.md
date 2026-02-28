@@ -133,22 +133,25 @@ source .venv/bin/activate
 cd FixedWingSimulator
 
 # 示例 1：4-DOF 线性模态分析（短周期 / 长周期）
-python examples/example_1_linear_response.py
+python examples/1_linear_response.py
 
 # 示例 2：6-DOF 非线性自由飞行，副翼脉冲响应
-python examples/example_2_nonlinear_dynamics.py
+python examples/2_nonlinear_dynamics.py
 
 # 示例 3：AUTO 模式 + Minimum Snap 500m 方形轨迹跟踪
-python examples/example_3_trajectory_tracking.py
+python examples/3_trajectory_tracking.py
 
-# 示例 4：FBW_B 模式 + 随机阵风扰动
-python examples/example_4_wind_resistance.py
+# 示例 4：四边形环绕飞行，L1 导航控制器测试
+python examples/4_circuit_flight.py
 
 # 示例 5：7 种飞行器短周期模态对比
-python examples/example_5_different_aircraft.py
+python examples/5_different_aircraft.py
 
 # 示例 6：ArduPilot 参数加载、PTCH_P 增益敏感性分析、导出 .param 文件
-python examples/example_6_ardupilot_parameters.py
+python examples/6_ardupilot_parameters.py
+
+# 示例 7：FBW_B 模式 + 随机阵风扰动
+python examples/7_wind_resistance.py
 ```
 
 ---
