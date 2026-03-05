@@ -123,25 +123,36 @@ class FixedWingSimulator:
     dt             : simulation time step (s)
     duration       : total simulation duration (s)
     initial_mode   : starting FlightMode (string or FlightMode enum)
-    wind_type      : 'NONE' | 'FIXED' | 'SINE' | 'RANDOMSINE'
+    wind_type      : 'NONE' | 'FIXED' | 'DRYDEN' | 'GUST' | 'COMBINED'
+                     (legacy: 'SINE' | 'RANDOMSINE' still accepted)
+    wind_speed     : mean wind speed (m/s), used by FIXED / COMBINED
+    wind_dir_deg   : wind FROM direction (met convention, deg)
+    wind_severity  : Dryden turbulence intensity 'light'|'moderate'|'severe'
+    wind_gusts     : list of gust dicts for GUST/COMBINED mode, each dict::
+                       {'axis': 0|1|2, 'amplitude': m/s,
+                        'gradient_m': m, 't_start': s}
     traj_type      : 'minimum_snap' | 'minimum_jerk'
     """
 
     def __init__(
         self,
-        aircraft_name: str  = "TB2",
-        config_dir:    str  = None,
+        aircraft_name: str   = "TB2",
+        config_dir:    str   = None,
         dt:            float = 0.01,
         duration:      float = 30.0,
-        initial_mode:  str  = "AUTO",
-        wind_type:     str  = "NONE",
-        traj_type:     str  = "minimum_snap",
+        initial_mode:  str   = "AUTO",
+        wind_type:     str   = "NONE",
+        wind_speed:    float = None,
+        wind_dir_deg:  float = None,
+        wind_severity: str   = "moderate",
+        wind_gusts:    list  = None,
+        traj_type:     str   = "minimum_snap",
     ):
         if aircraft_name not in AIRCRAFT_NAMES:
             raise ValueError(f"Unknown aircraft '{aircraft_name}'. Available: {AIRCRAFT_NAMES}")
 
-        self.dt       = dt
-        self.duration = duration
+        self.dt        = dt
+        self.duration  = duration
         self.wind_type = wind_type
         self.traj_type = traj_type
 
@@ -157,10 +168,20 @@ class FixedWingSimulator:
         self.params = self.aircraft_cfg.aero_params
 
         # --- Environment ----------------------------------------------------
-        env_wind_type  = wind_type or sim_cfg.get("wind_type", "NONE")
-        wind_speed     = sim_cfg.get("wind_speed", 5.0)
-        wind_dir_deg   = sim_cfg.get("wind_direction_deg", 270.0)
-        self.wind = Wind(env_wind_type, speed=wind_speed, direction_deg=wind_dir_deg)
+        # Constructor args take priority over simulation.yaml values.
+        env_wind_type = wind_type or sim_cfg.get("wind_type", "NONE")
+        _speed    = wind_speed   if wind_speed   is not None else sim_cfg.get("wind_speed", 5.0)
+        _dir_deg  = wind_dir_deg if wind_dir_deg is not None else sim_cfg.get("wind_direction_deg", 270.0)
+        self.wind = Wind(
+            env_wind_type,
+            speed=_speed,
+            direction_deg=_dir_deg,
+            altitude_m=100.0,        # nominal; updated at runtime from state
+            airspeed_mps=40.0,       # nominal; updated at runtime from state
+            severity=wind_severity,
+            dt=dt,
+            gusts=wind_gusts,
+        )
 
         # --- Control parameters (ArduPilot) ---------------------------------
         ctrl_path = os.path.join(config_dir, "control_params.yaml")
@@ -328,11 +349,15 @@ class FixedWingSimulator:
 
         def f_ode(t, y):
             ctrl = ctrl_holder[0]
-            wind_ned  = self.wind.get_wind_ned(t)
+            alt  = -y[11]
+            # Pass current airspeed and altitude so Dryden filters use
+            # correct frozen-field speed and turbulence intensity.
+            u_b, v_b, w_b = y[0], y[1], y[2]
+            V_cur = float(np.sqrt(u_b**2 + v_b**2 + w_b**2))
+            wind_ned  = self.wind.get_wind_ned(t, V=V_cur, alt=alt)
             phi, theta, psi = y[6], y[7], y[8]
             R = rotation_matrix_321(phi, theta, psi)
             wind_body = R.T @ wind_ned
-            alt = -y[11]
             rho = compute_density(alt)
             return self.dyn.state_dot(t, y, ctrl, wind_body=wind_body, rho=rho)
 
@@ -618,7 +643,10 @@ class FixedWingSimulator:
 
         def f_ode(t, y):
             ctrl = self._ctrl_state
-            wind_ned = self.wind.get_wind_ned(t)
+            alt  = -y[11]
+            u_b, v_b, w_b = y[0], y[1], y[2]
+            V_cur = float(np.sqrt(u_b**2 + v_b**2 + w_b**2))
+            wind_ned = self.wind.get_wind_ned(t, V=V_cur, alt=alt)
             phi, theta, psi = y[6], y[7], y[8]
             R = rotation_matrix_321(phi, theta, psi)
             wind_body = R.T @ wind_ned
