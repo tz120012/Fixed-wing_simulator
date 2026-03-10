@@ -1,0 +1,62 @@
+# PX4 固定翼控制参数配置
+# 参考：https://docs.px4.io/main/en/config_fw/
+
+# ---- 导航参数 ----
+ALT_HOLD_RTL: 50.0
+AIRSPEED_CRUISE: 40.0
+AIRSPEED_MIN: 28.0
+AIRSPEED_MAX: 60.0
+NAVL1_DAMPING: 0.75
+NAVL1_PERIOD: 45.0
+
+# ---- 姿态外环（时间常数 TC）----
+# TC 越小 → 响应越快，越硬（典型值：0.3-0.7秒）
+# TC 越大 → 响应越慢，越软
+FW_R_TC: 1.0    # 滚转时间常数 (s) - 从 ArduPilot ROLL_P=1.0 映射：TC=1/P
+FW_P_TC: 1.0    # 俯仰时间常数 (s) - 从 ArduPilot PTCH_P=1.0 映射：TC=1/P
+FW_Y_TC: 0.5    # 偏航时间常数 (s)
+
+# ---- 速率内环（P + I + FF，无D项）----
+# 滚转通道 - 使用 ArduPilot 的速率环参数
+FW_RR_P: 0.80   # 滚转速率比例增益 (对应 ROLL_RATE_P)
+FW_RR_I: 0.02   # 滚转速率积分增益 (对应 ROLL_RATE_I)
+FW_RR_FF: 0.0   # 滚转速率前馈增益 (对应 ROLL_RATE_FF)
+
+# 俯仰通道 - 使用 ArduPilot 的速率环参数
+FW_PR_P: 1.5    # 俯仰速率比例增益 (对应 PTCH_RATE_P)
+FW_PR_I: 0.05   # 俯仰速率积分增益 (对应 PTCH_RATE_I)
+FW_PR_FF: 0.0   # 俯仰速率前馈增益 (对应 PTCH_RATE_FF)
+
+# 偏航通道 - 使用 ArduPilot 的速率环参数
+FW_YR_P: 0.02   # 偏航速率比例增益 (对应 YAW_RATE_P)
+FW_YR_I: 0.0    # 偏航速率积分增益 (对应 YAW_RATE_I)
+FW_YR_FF: 0.0   # 偏航速率前馈增益 (对应 YAW_RATE_FF)
+
+# ---- 角速率限制 ----
+FW_R_RMAX: 120.0   # 最大滚转角速率 (deg/s)
+FW_P_RMAX: 60.0    # 最大俯仰角速率 (deg/s)
+FW_Y_RMAX: 45.0    # 最大偏航角速率 (deg/s)
+
+# ---- 姿态限制 ----
+LIM_PITCH_MAX: 15.0    # 最大俯仰角 (deg)
+LIM_PITCH_MIN: -15.0   # 最小俯仰角 (deg)
+LIM_ROLL_CD: 3500.0    # 最大滚转角 (centidegrees, 35度)
+THR_MAX: 1.0           # 最大油门
+THR_MIN: 0.0           # 最小油门
+
+# ---- TECS (Total Energy Control System) ----
+# 参考 PX4 FW_T_* 参数（与 ArduPilot 保持一致）
+TECS_CLMB_MAX: 3.0        # 最大爬升率 (m/s)
+TECS_SINK_MIN: 2.0        # 最小下沉率 (m/s)
+TECS_SINK_MAX: 3.0        # 最大下沉率 (m/s)
+TECS_TIME_CONST: 8.0      # 控制时间常数 (s)
+TECS_THR_DAMP: 0.7        # 油门阻尼
+TECS_PTCH_DAMP: 0.8       # 俯仰阻尼
+TECS_INTEG_GAIN: 0.05     # 积分增益
+TECS_SPDWEIGHT: 1.0       # 速度权重
+TECS_RLL2THR: 18.0        # 坡度转油门补偿
+TECS_PITCH_MAX: 12.0      # TECS 允许的最大俯仰角 (deg)
+TECS_PITCH_MIN: -12.0     # TECS 允许的最小俯仰角 (deg)
+TECS_THR_CRUISE: 0.51     # 巡航油门前馈
+TECS_HDEM_TCONST: 3.0     # 高度需求低通时间常数 (s)
+

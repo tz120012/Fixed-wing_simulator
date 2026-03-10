@@ -1,0 +1,22 @@
+# Trajectory planning configuration
+
+# Trajectory type: minimum_snap | minimum_jerk | minimum_accel | minimum_vel | hover
+type: minimum_snap
+
+# Average cruise speed used to compute inter-waypoint segment times (m/s)
+average_speed: 30.0
+
+# Yaw control mode: none | yaw_follow | yaw_waypoint_interp | zero
+yaw_mode: yaw_follow
+
+# Waypoints list: each entry is [north_m, east_m, alt_m]
+# alt_m is positive UP (converted internally to NED z = -alt)
+waypoints:
+  - [0.0,    0.0,   100.0]
+  - [500.0,  0.0,   100.0]
+  - [500.0, 500.0,  100.0]
+  - [0.0,   500.0,  100.0]
+  - [0.0,    0.0,   100.0]
+
+# Loop trajectory after reaching last waypoint
+loop: false
